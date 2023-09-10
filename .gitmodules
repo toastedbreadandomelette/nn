@@ -1,0 +1,3 @@
+[submodule "vector-rs"]
+    path = src/vector
+    url = https://github.com/toastedbreadandomelette/vector-rs
