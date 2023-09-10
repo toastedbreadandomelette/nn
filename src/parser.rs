@@ -800,18 +800,6 @@ impl<'a> CsvParser<'a> {
                         // Scan as it is
                         _ => {}
                     }
-                    // } else {
-                    //     match *c {
-                    //         b'\n' => {
-                    //             skip_new_line += 1;
-                    //             skip_new_line %= total_threads;
-                    //             if skip_new_line == self.id {
-                    //                 self.state = ParseState::Start;
-                    //             }
-                    //         }
-                    //         _ => {}
-                    //     }
-                    // }
                 });
             },
         );
