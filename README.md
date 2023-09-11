@@ -1,3 +1,3 @@
 # nn
-Workspace for neural network
+Workspace for parsing, modifying and working on datasets for neural network
 

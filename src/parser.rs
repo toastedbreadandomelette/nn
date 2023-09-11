@@ -1,4 +1,5 @@
-use std::thread::ScopedJoinHandle;
+use crate::parse_state::ParseState;
+use std::thread::Scope;
 
 use crate::cell::Cell;
 use crate::dframe::DataFrame;
@@ -7,8 +8,6 @@ use vector::Vector;
 pub struct CsvParser<'a> {
     /// Buffer to parse from
     byte_buffer: &'a [u8],
-    /// Id: (Might be useful for multithreading: [`std::thread`])
-    id: usize,
     /// Current offset
     offset: usize,
     /// Batch size
@@ -19,115 +18,16 @@ pub struct CsvParser<'a> {
     header_scanned: Vec<String>,
 }
 
-/// State evaluator that tells the current data type and
-/// nature of parsing data based of previous state and the current byte
-/// the buffer returns.
-#[allow(unused)]
-#[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
-pub enum ParseState {
-    /// Start of parsing section
-    Start,
-    /// Reading Header String
-    HeaderString,
-    /// Reading Quote Start
-    HeaderQuoteStart,
-    /// Reading Closing Quote
-    HeaderQuoteEnd,
-    /// Reading Separator in header
-    HeaderSep,
-
-    /// Cell value start, which is a string
-    CellString,
-    /// Cell value, which is a string
-    CellCurrent,
-
-    /// Cell quote start, which is a string
-    CellQuoteStart,
-    /// Cell quote body, which is a string
-    CellQuoteCurrent,
-    /// Cell quote end, which is a string
-    CellQuoteEnd,
-
-    /// Cell quote start, which is a number
-    CellQuoteNumberStart,
-    /// Cell quote body, which is a number
-    CellQuoteNumberCurrent,
-    /// Cell quote end, which is a number
-    CellQuoteNumberEnd,
-
-    /// Cell quote start, which is a number
-    CellQuoteDecimalStart,
-    /// Cell quote body, which is a number
-    CellQuoteDecimalCurrent,
-    /// Cell quote end, which is a number
-    CellQuoteDecimalEnd,
-
-    /// Start reading number
-    CellNumberStart,
-    /// Reading number
-    CellNumberCurrent,
-    /// End reading number
-    CellNumberEnd,
-
-    /// Start reading decimal number
-    CellDecimalStart,
-    /// Read decimal number
-    CellDecimalCurrent,
-    /// End reading decimal number
-    CellDecimalEnd,
-
-    /// Read decimal number with decimal point read
-    CellDecimalStartWithPointRead,
-    /// Read decimal number with decimal point read
-    CellDecimalCurrentWithPointRead,
-    /// Read decimal number with decimal point read
-    CellDecimalEndWithPointRead,
-
-    /// Read decimal number with decimal point read
-    CellQuoteDecimalStartWithPointRead,
-    /// Read decimal number with decimal point read
-    CellQuoteDecimalCurrentWithPointRead,
-    /// Read decimal number with decimal point read
-    CellQuoteDecimalEndWithPointRead,
-
-    /// Read separator
-    CellSep,
-    /// Skip character
-    SkipChar,
-    /// Skip whitespace within cell
-    SkippedStartWhitespace,
-    /// Skip whitespace but assume might be the end
-    SkippedAssumeEndWhitespace,
-    /// Reading new line character
-    NewLine,
-    /// File end
-    EndFile,
-}
-
 impl<'a> CsvParser<'a> {
     /// Create a naive parser
     #[inline]
     pub fn new(byte_buffer: &'a [u8]) -> Self {
         Self {
             byte_buffer,
-            id: 0,
             offset: 0,
             batch_size: 2048,
             header_scanned: Vec::new(),
             state: ParseState::Start,
-        }
-    }
-
-    /// Create a parser with assigned ID
-    #[inline]
-    pub fn with_id(byte_buffer: &'a [u8], id: usize) -> Self {
-        Self {
-            byte_buffer,
-            id,
-            offset: 0,
-            batch_size: 2048,
-            state: ParseState::Start,
-            header_scanned: Vec::new(),
         }
     }
 
@@ -151,23 +51,6 @@ impl<'a> CsvParser<'a> {
     fn skip_whitespace(&mut self) {
         while let Some(b' ' | b'\n' | 9..=13) = self.get_curr_byte() {
             self.move_next()
-        }
-    }
-
-    /// Start scanning this buffer from certain offset
-    #[inline]
-    pub fn with_id_from_offset(
-        byte_buffer: &'a [u8],
-        id: usize,
-        offset: usize,
-    ) -> Self {
-        Self {
-            byte_buffer,
-            id,
-            offset,
-            batch_size: 2048,
-            state: ParseState::Start,
-            header_scanned: Vec::new(),
         }
     }
 
@@ -287,230 +170,6 @@ impl<'a> CsvParser<'a> {
         (self.header_scanned.to_owned(), self.offset)
     }
 
-    /// Handle transition to states when current state is
-    /// reading a decimal value
-    #[inline(always)]
-    const fn handle_decimal_state(initial_state: ParseState) -> ParseState {
-        match initial_state {
-            ParseState::CellNumberCurrent | ParseState::CellNumberStart => {
-                ParseState::CellDecimalCurrentWithPointRead
-            }
-
-            ParseState::CellQuoteStart => {
-                ParseState::CellQuoteDecimalStartWithPointRead
-            }
-
-            ParseState::CellQuoteCurrent => ParseState::CellQuoteCurrent,
-
-            // While reading potential number, switch to
-            // potential quoted decimal number
-            ParseState::CellQuoteNumberStart
-            | ParseState::CellQuoteNumberCurrent => {
-                ParseState::CellQuoteDecimalCurrentWithPointRead
-            }
-
-            // If quoted decimal is already acknowledged, then it's not
-            // a decimal value, but a quoted string
-            ParseState::CellQuoteDecimalStartWithPointRead
-            | ParseState::CellQuoteDecimalCurrentWithPointRead => {
-                ParseState::CellQuoteCurrent
-            }
-
-            // If decimal is already acknowledged, then it's not
-            // a decimal value, but a string
-            ParseState::CellString
-            | ParseState::CellDecimalStartWithPointRead
-            | ParseState::CellDecimalCurrentWithPointRead
-            | ParseState::CellCurrent => ParseState::CellCurrent,
-
-            _ => ParseState::CellDecimalStartWithPointRead,
-        }
-    }
-
-    /// Handle transition to states when current state is
-    /// reading certain value
-    #[inline(always)]
-    const fn handle_default(initial_state: ParseState) -> ParseState {
-        match initial_state {
-            // If quoted, continue reading.
-            ParseState::CellQuoteStart | ParseState::CellQuoteCurrent => {
-                ParseState::CellQuoteCurrent
-            }
-
-            // Does matter iff any special number, switch to
-            // normal non-quoted string.
-            ParseState::CellString
-            | ParseState::CellCurrent
-            | ParseState::CellNumberCurrent
-            | ParseState::CellDecimalCurrent
-            | ParseState::CellDecimalStartWithPointRead
-            | ParseState::CellDecimalCurrentWithPointRead
-            | ParseState::CellQuoteDecimalStartWithPointRead
-            | ParseState::CellQuoteDecimalCurrentWithPointRead => {
-                ParseState::CellCurrent
-            }
-
-            _ => ParseState::CellString,
-        }
-    }
-
-    /// Handle transition to states when current state is
-    /// reading separator
-    #[inline(always)]
-    const fn handle_separator(initial_state: ParseState) -> ParseState {
-        match initial_state {
-            // Any quoted values defaults to quoted string, knowing
-            // that separator is read.
-            ParseState::CellQuoteCurrent
-            | ParseState::CellQuoteStart
-            | ParseState::CellQuoteDecimalCurrent
-            | ParseState::CellQuoteDecimalStart
-            | ParseState::CellQuoteDecimalStartWithPointRead
-            | ParseState::CellQuoteDecimalCurrentWithPointRead => {
-                ParseState::CellQuoteCurrent
-            }
-
-            ParseState::CellNumberCurrent | ParseState::CellNumberStart => {
-                ParseState::CellNumberEnd
-            }
-
-            ParseState::CellDecimalCurrent
-            | ParseState::CellDecimalStart
-            | ParseState::CellDecimalStartWithPointRead
-            | ParseState::CellDecimalCurrentWithPointRead => {
-                ParseState::CellDecimalEnd
-            }
-
-            _ => ParseState::CellSep,
-        }
-    }
-
-    #[inline(always)]
-    const fn handle_number(initial_state: ParseState) -> ParseState {
-        match initial_state {
-            ParseState::CellQuoteDecimalStartWithPointRead
-            | ParseState::CellQuoteDecimalCurrentWithPointRead => {
-                ParseState::CellQuoteDecimalCurrentWithPointRead
-            }
-
-            ParseState::CellQuoteStart
-            | ParseState::CellQuoteNumberStart
-            | ParseState::CellQuoteNumberCurrent => {
-                ParseState::CellQuoteNumberCurrent
-            }
-
-            ParseState::CellQuoteCurrent => ParseState::CellQuoteCurrent,
-
-            ParseState::CellNumberCurrent | ParseState::CellNumberStart => {
-                ParseState::CellNumberCurrent
-            }
-
-            ParseState::CellDecimalStartWithPointRead
-            | ParseState::CellDecimalCurrentWithPointRead => {
-                ParseState::CellDecimalCurrentWithPointRead
-            }
-
-            ParseState::CellDecimalCurrent | ParseState::CellDecimalStart => {
-                ParseState::CellDecimalCurrent
-            }
-
-            ParseState::CellString | ParseState::CellCurrent => {
-                ParseState::CellCurrent
-            }
-
-            _ => ParseState::CellNumberStart,
-        }
-    }
-
-    /// Evaluate next state `ParseState` given the `initial_state`
-    /// and knowing that character is end line.
-    ///
-    /// Jump from
-    /// ```
-    /// CellQuoteCurrent | CellQuoteStart => CellQuoteCurrent, /// (While reading quotes, we're still reading cell),
-    /// CellNumberCurrent | CellNumberStart => CellNumberEnd,
-    /// CellDecimalStart | CellDecimalCurrent => CellDecimalEnd,
-    /// ```
-    ///
-    #[inline(always)]
-    const fn handle_lf(initial_state: ParseState, c: u8) -> ParseState {
-        match initial_state {
-            // Starting with quote and running into new-line characters
-            // should default to normal quoted string.
-            ParseState::CellQuoteCurrent
-            | ParseState::CellQuoteStart
-            | ParseState::CellQuoteDecimalCurrent
-            | ParseState::CellQuoteDecimalStart
-            | ParseState::CellQuoteDecimalStartWithPointRead
-            | ParseState::CellQuoteDecimalCurrentWithPointRead => {
-                ParseState::CellQuoteCurrent
-            }
-
-            ParseState::CellNumberCurrent | ParseState::CellNumberStart => {
-                ParseState::CellNumberEnd
-            }
-
-            ParseState::CellDecimalCurrent
-            | ParseState::CellDecimalStart
-            | ParseState::CellDecimalStartWithPointRead
-            | ParseState::CellDecimalCurrentWithPointRead => {
-                ParseState::CellDecimalEnd
-            }
-
-            _ => {
-                if c == b'\r' {
-                    ParseState::CellSep
-                } else {
-                    ParseState::NewLine
-                }
-            }
-        }
-    }
-
-    /// Evaluate next state `ParseState` given the `initial_state`
-    /// and the `byte`.
-    ///
-    /// ## To Do
-    /// - Handle for generic separator
-    /// - Maybe move from byte to char or byte sequence
-    #[inline]
-    const fn get_scan_state_from_data(
-        initial_state: ParseState,
-        c: u8,
-    ) -> ParseState {
-        match c {
-            // If quote is started, end it else start the quote
-            b'"' => match initial_state {
-                // If previous started or running, end the values
-                ParseState::CellQuoteStart | ParseState::CellQuoteCurrent => {
-                    ParseState::CellQuoteEnd
-                }
-                ParseState::CellQuoteDecimalStart
-                | ParseState::CellQuoteDecimalCurrent => {
-                    ParseState::CellQuoteDecimalEnd
-                }
-                ParseState::CellQuoteDecimalStartWithPointRead
-                | ParseState::CellQuoteDecimalCurrentWithPointRead => {
-                    ParseState::CellQuoteDecimalEndWithPointRead
-                }
-                _ => ParseState::CellQuoteStart,
-            },
-
-            // Handle when a single point is read by the parser
-            b'.' => Self::handle_decimal_state(initial_state),
-
-            // Handle when a single point is read by the parser
-            b'0'..=b'9' => Self::handle_number(initial_state),
-
-            // To-do Handle generic separator
-            b',' => Self::handle_separator(initial_state),
-
-            b'\r' | b'\n' => Self::handle_lf(initial_state, c),
-            // b' ' => ParseState::SkippedStartWhitespace,
-            _ => Self::handle_default(initial_state),
-        }
-    }
-
     #[inline]
     fn convert_from_slice(slice: &str, state: ParseState) -> Cell {
         match state {
@@ -590,8 +249,8 @@ impl<'a> CsvParser<'a> {
         let (next, _) = x.next().unwrap();
         let mut skip_new_line = 0;
 
-        let (mut start, mut start_used, chunk_size) =
-            (0, true, self.batch_size);
+        let (mut start, mut start_used, mut end, mut end_used, chunk_size) =
+            (0, true, 0, true, self.batch_size);
 
         self.byte_buffer[next..]
             .chunks(chunk_size)
@@ -602,7 +261,8 @@ impl<'a> CsvParser<'a> {
                 buff.iter().enumerate().for_each(|(new_idx, c)| {
                     let index = curr + new_idx;
 
-                    self.state = Self::get_scan_state_from_data(self.state, *c);
+                    self.state =
+                        ParseState::get_scan_state_from_data(self.state, *c);
 
                     match self.state {
                         // Scan start, get the current state based on the
@@ -614,6 +274,7 @@ impl<'a> CsvParser<'a> {
                         | ParseState::CellNumberStart => {
                             start = index;
                             start_used = false;
+                            end_used = false;
                         }
 
                         ParseState::CellQuoteStart
@@ -622,6 +283,7 @@ impl<'a> CsvParser<'a> {
                         | ParseState::CellQuoteDecimalCurrentWithPointRead => {
                             start = index + 1;
                             start_used = false;
+                            end_used = false;
                         }
 
                         // Scan start of quoted header string,
@@ -631,11 +293,15 @@ impl<'a> CsvParser<'a> {
                         | ParseState::CellDecimalEndWithPointRead
                         | ParseState::CellSep
                         | ParseState::NewLine => {
+                            if !end_used {
+                                end = index;
+                                end_used = true;
+                            }
                             let push_value = unsafe {
                                 if !start_used {
                                     let str_slice =
                                         core::str::from_utf8_unchecked(
-                                            &self.byte_buffer[start..index],
+                                            &self.byte_buffer[start..end],
                                         );
 
                                     Self::convert_from_slice(
@@ -647,7 +313,7 @@ impl<'a> CsvParser<'a> {
                             };
 
                             if self.state != ParseState::NewLine {
-                                start_used = true;
+                                (start_used, end_used) = (true, true);
                                 column_data.push(push_value);
                             } else {
                                 skip_new_line += 1;
@@ -658,27 +324,28 @@ impl<'a> CsvParser<'a> {
                         | ParseState::CellQuoteNumberEnd
                         | ParseState::CellQuoteDecimalEnd
                         | ParseState::CellQuoteDecimalEndWithPointRead => {
-                            let push_value = unsafe {
-                                if !start_used {
-                                    let str_slice =
-                                        core::str::from_utf8_unchecked(
-                                            &self.byte_buffer[start..index - 1],
-                                        );
+                            end = index;
+                            end_used = true;
+                            // let push_value = unsafe {
+                            //     if !start_used {
+                            //         let str_slice =
+                            //             core::str::from_utf8_unchecked(
+                            //                 &self.byte_buffer[start..index - 1],
+                            //             );
 
-                                    Self::convert_from_slice(
-                                        str_slice, self.state,
-                                    )
-                                } else {
-                                    Cell::Null
-                                }
-                            };
+                            //         Self::convert_from_slice(
+                            //             str_slice, self.state,
+                            //         )
+                            //     } else {
+                            //         Cell::Null
+                            //     }
+                            // };
 
-                            if self.state != ParseState::NewLine {
-                                start_used = true;
-                                column_data.push(push_value);
-                            } else {
-                                skip_new_line += 1;
-                            }
+                            // if self.state != ParseState::NewLine {
+                            //     // column_data.push(push_value);
+                            // } else {
+                            //     skip_new_line += 1;
+                            // }
                         }
                         // Scan as it is
                         _ => {}
@@ -693,12 +360,11 @@ impl<'a> CsvParser<'a> {
     #[allow(unused_assignments)]
     fn parse_content_on_buffer(
         &mut self,
-        total_threads: usize,
         column_data: &mut [Cell],
     ) {
         // Column data
-        let (mut start, mut start_used, chunk_size) =
-            (0, true, self.batch_size);
+        let (mut start, mut start_used, mut end, mut end_used, chunk_size) =
+            (0, true, 0, true, self.batch_size);
 
         let (mut arr_index, mut skip_new_line) = (0, 0);
 
@@ -710,7 +376,8 @@ impl<'a> CsvParser<'a> {
                     // if skip_new_line == self.id {
                     let index = curr + new_idx;
 
-                    self.state = Self::get_scan_state_from_data(self.state, *c);
+                    self.state =
+                        ParseState::get_scan_state_from_data(self.state, *c);
 
                     match self.state {
                         // Scan start, get the current state based on the
@@ -722,14 +389,16 @@ impl<'a> CsvParser<'a> {
                         | ParseState::CellNumberStart => {
                             start = index;
                             start_used = false;
+                            end_used = false;
                         }
 
                         ParseState::CellQuoteStart
                         | ParseState::CellQuoteNumberStart
                         | ParseState::CellQuoteDecimalStart
-                        | ParseState::CellQuoteDecimalStartWithPointRead => {
+                        | ParseState::CellQuoteDecimalCurrentWithPointRead => {
                             start = index + 1;
                             start_used = false;
+                            end_used = false;
                         }
 
                         // Scan start of quoted header string,
@@ -738,11 +407,15 @@ impl<'a> CsvParser<'a> {
                         | ParseState::CellDecimalEnd
                         | ParseState::CellSep
                         | ParseState::NewLine => {
+                            if !end_used {
+                                end = index;
+                                end_used = true;
+                            }
                             let push_value = unsafe {
                                 if !start_used {
                                     let str_slice =
                                         core::str::from_utf8_unchecked(
-                                            &self.byte_buffer[start..index],
+                                            &self.byte_buffer[start..end],
                                         );
 
                                     Self::convert_from_slice(
@@ -754,14 +427,11 @@ impl<'a> CsvParser<'a> {
                             };
 
                             if self.state != ParseState::NewLine {
-                                start_used = true;
+                                (start_used, end_used) = (true, true);
                                 if arr_index < column_data.len() {
                                     column_data[arr_index] = push_value;
                                 }
                                 arr_index += 1;
-                            } else {
-                                skip_new_line += 1;
-                                skip_new_line %= total_threads;
                             }
                         }
                         // Scan start of quoted header string,
@@ -770,31 +440,29 @@ impl<'a> CsvParser<'a> {
                         | ParseState::CellQuoteNumberEnd
                         | ParseState::CellQuoteDecimalEnd
                         | ParseState::CellQuoteDecimalEndWithPointRead => {
-                            let push_value = unsafe {
-                                if !start_used {
-                                    let str_slice =
-                                        core::str::from_utf8_unchecked(
-                                            &self.byte_buffer[start..index],
-                                        );
+                            end = index;
+                            end_used = true;
+                            // let push_value = unsafe {
+                            //     if !start_used {
+                            //         let str_slice =
+                            //             core::str::from_utf8_unchecked(
+                            //                 &self.byte_buffer[start..index],
+                            //             );
 
-                                    Self::convert_from_slice(
-                                        str_slice, self.state,
-                                    )
-                                } else {
-                                    Cell::Null
-                                }
-                            };
+                            //         Self::convert_from_slice(
+                            //             str_slice, self.state,
+                            //         )
+                            //     } else {
+                            //         Cell::Null
+                            //     }
+                            // };
 
-                            if self.state != ParseState::NewLine {
-                                start_used = true;
-                                if arr_index < column_data.len() {
-                                    column_data[arr_index] = push_value;
-                                }
-                                arr_index += 1;
-                            } else {
-                                skip_new_line += 1;
-                                skip_new_line %= total_threads;
-                            }
+                            // if self.state != ParseState::NewLine {
+                            //     if arr_index < column_data.len() {
+                            //         column_data[arr_index] = push_value;
+                            //     }
+                            //     arr_index += 1;
+                            // }
                         }
 
                         // Scan as it is
@@ -805,9 +473,9 @@ impl<'a> CsvParser<'a> {
         );
     }
 
-    /// Trim ascii having whitespaces.
+    /// Trim ascii having whitespaces, and returns a new `slice`
     #[inline]
-    fn trim_ascii<'b>(slice: &'b [u8]) -> &'b [u8] {
+    fn trim_ascii(slice: &[u8]) -> &[u8] {
         let start = slice.iter().position(|c| !c.is_ascii_whitespace());
         let end = slice.iter().rev().position(|c| !c.is_ascii_whitespace());
 
@@ -815,7 +483,7 @@ impl<'a> CsvParser<'a> {
             (Some(st), Some(ed)) => &slice[st..slice.len() - ed],
             (None, Some(ed)) => &slice[..slice.len() - ed],
             (Some(st), None) => &slice[st..],
-            (None, None) => &slice[..],
+            (None, None) => slice,
         }
     }
 
@@ -823,22 +491,20 @@ impl<'a> CsvParser<'a> {
     /// of the buffer to be read.
     fn get_total_lines_in_a_file<'c>(
         mmaped_buffer: &'c [u8],
-        scope: &'c std::thread::Scope<'c, '_>,
+        scope: &'c Scope<'c, '_>,
         thread_number: usize,
     ) -> Vec<(usize, usize, usize)> {
+        // Thread should be processing sub-array of elements.
         let slots_division = mmaped_buffer.len() / thread_number;
 
-        let mut end_prefix = match mmaped_buffer[slots_division..]
+        // Parsing and finding the end point of the line.
+        let mut end_prefix = mmaped_buffer[slots_division..]
             .iter()
             .position(|c| *c == b'\n')
-        {
-            Some(index) => index,
-            None => 0,
-        } + slots_division;
+            .unwrap_or(0) + slots_division;
 
         let mut slices: Vec<(&'c [u8], usize, usize)> =
             Vec::with_capacity(thread_number);
-
         slices.push((&mmaped_buffer[..end_prefix], 0, end_prefix));
 
         slices.extend((1..thread_number - 1).map(|multiplier| {
@@ -848,11 +514,7 @@ impl<'a> CsvParser<'a> {
             let end_pos = (multiplier + 1) * slots_division;
             // Seek the start position to start from position next to \n
             let epos =
-                match mmaped_buffer[end_pos..].iter().position(|c| *c == b'\n')
-                {
-                    Some(index) => index,
-                    None => 0,
-                } + end_pos;
+                mmaped_buffer[end_pos..].iter().position(|c| *c == b'\n').unwrap_or(0) + end_pos;
 
             end_prefix = epos;
             (&mmaped_buffer[spos..epos], spos, epos)
@@ -873,7 +535,6 @@ impl<'a> CsvParser<'a> {
                     end,
                 )
             })
-            .into_iter()
             .map(|(c, st, ed)| (c.join().unwrap(), st, ed))
             .collect()
     }
@@ -914,22 +575,18 @@ impl<'a> CsvParser<'a> {
         // Calculate total lines read
         let length = std::thread::scope(|scope| {
             Self::get_total_lines_in_a_file(
-                &mmaped_slice[..],
+                mmaped_slice,
                 scope,
                 total_threads,
             )
         });
         let c = length.iter().fold(0, |prev, curr| prev + curr.0) - 1;
 
-        // unsafe { println!("{length:?}") }
-        // // To-do: Make a convenient way to parse header as well as return apporpriate
-        // // slice that is suitable for parsing and storing values.
-
-        // // Initialized result with zero value.
+        // Initialized result with zero value.
         let mut result: Vector<Cell> = Vector::zeroed(c * scanned_header.len());
 
-        // // // UNSAFE CALL: Creates multiple slices of vector `result` into smaller pieces,
-        // // // since reallocating multiple vector or flattening is slower.
+        // UNSAFE CALL: Creates multiple slices of vector `result` into smaller pieces,
+        // since reallocating multiple vector or flattening is slower.
         let mut sliced_buffer = Self::split_slices(
             &mut result,
             &length,
@@ -940,7 +597,7 @@ impl<'a> CsvParser<'a> {
         std::thread::scope(|scope| {
             // Trim whitespaces
             // To do: for each thread, start from offset just next to new line
-            let mmaped2 = &mmaped_slice[..];
+            let mmaped2 = &mmaped_slice;
 
             sliced_buffer.iter_mut().zip(length).enumerate().for_each(
                 |(_, (res, (len, start, end)))| {
@@ -950,7 +607,7 @@ impl<'a> CsvParser<'a> {
                     debug_assert_eq!(res.len(), len * scanned_header.len());
                     scope.spawn(move || {
                         CsvParser::new(&mmaped2[start..end])
-                            .parse_content_on_buffer(total_threads, res);
+                            .parse_content_on_buffer(res);
                     });
                 },
             );
@@ -964,31 +621,6 @@ impl<'a> CsvParser<'a> {
     /// Opens the file in memory mapped IO (read-only) and
     /// collects the data from file
     pub fn parse(file_name: &'a str) -> DataFrame {
-        let fd = std::fs::OpenOptions::new()
-            .read(true)
-            .open(file_name)
-            .unwrap();
-
-        let mmaped = unsafe {
-            memmap2::MmapOptions::new()
-                .populate()
-                .stack()
-                .map(&fd)
-                .unwrap()
-        };
-
-        let sliced = Self::trim_ascii(&mmaped);
-        let mut p = CsvParser::new(&sliced);
-        p.skip_whitespace();
-
-        // Scan header
-        // This can be left optional
-        let (scan_header, offset_from_scanner) = p.scan_header();
-        p.state = ParseState::Start;
-
-        let parsed_data =
-            CsvParser::new(&sliced).parse_content(offset_from_scanner);
-
-        DataFrame::new(parsed_data, scan_header)
+        Self::parse_multi_threaded(file_name, 1)
     }
 }
