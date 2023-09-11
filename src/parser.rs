@@ -326,26 +326,6 @@ impl<'a> CsvParser<'a> {
                         | ParseState::CellQuoteDecimalEndWithPointRead => {
                             end = index;
                             end_used = true;
-                            // let push_value = unsafe {
-                            //     if !start_used {
-                            //         let str_slice =
-                            //             core::str::from_utf8_unchecked(
-                            //                 &self.byte_buffer[start..index - 1],
-                            //             );
-
-                            //         Self::convert_from_slice(
-                            //             str_slice, self.state,
-                            //         )
-                            //     } else {
-                            //         Cell::Null
-                            //     }
-                            // };
-
-                            // if self.state != ParseState::NewLine {
-                            //     // column_data.push(push_value);
-                            // } else {
-                            //     skip_new_line += 1;
-                            // }
                         }
                         // Scan as it is
                         _ => {}
@@ -358,10 +338,7 @@ impl<'a> CsvParser<'a> {
 
     /// Get total lines from the file
     #[allow(unused_assignments)]
-    fn parse_content_on_buffer(
-        &mut self,
-        column_data: &mut [Cell],
-    ) {
+    fn parse_content_on_buffer(&mut self, column_data: &mut [Cell]) {
         // Column data
         let (mut start, mut start_used, mut end, mut end_used, chunk_size) =
             (0, true, 0, true, self.batch_size);
@@ -442,27 +419,6 @@ impl<'a> CsvParser<'a> {
                         | ParseState::CellQuoteDecimalEndWithPointRead => {
                             end = index;
                             end_used = true;
-                            // let push_value = unsafe {
-                            //     if !start_used {
-                            //         let str_slice =
-                            //             core::str::from_utf8_unchecked(
-                            //                 &self.byte_buffer[start..index],
-                            //             );
-
-                            //         Self::convert_from_slice(
-                            //             str_slice, self.state,
-                            //         )
-                            //     } else {
-                            //         Cell::Null
-                            //     }
-                            // };
-
-                            // if self.state != ParseState::NewLine {
-                            //     if arr_index < column_data.len() {
-                            //         column_data[arr_index] = push_value;
-                            //     }
-                            //     arr_index += 1;
-                            // }
                         }
 
                         // Scan as it is
@@ -501,7 +457,8 @@ impl<'a> CsvParser<'a> {
         let mut end_prefix = mmaped_buffer[slots_division..]
             .iter()
             .position(|c| *c == b'\n')
-            .unwrap_or(0) + slots_division;
+            .unwrap_or(0)
+            + slots_division;
 
         let mut slices: Vec<(&'c [u8], usize, usize)> =
             Vec::with_capacity(thread_number);
@@ -513,8 +470,11 @@ impl<'a> CsvParser<'a> {
 
             let end_pos = (multiplier + 1) * slots_division;
             // Seek the start position to start from position next to \n
-            let epos =
-                mmaped_buffer[end_pos..].iter().position(|c| *c == b'\n').unwrap_or(0) + end_pos;
+            let epos = mmaped_buffer[end_pos..]
+                .iter()
+                .position(|c| *c == b'\n')
+                .unwrap_or(0)
+                + end_pos;
 
             end_prefix = epos;
             (&mmaped_buffer[spos..epos], spos, epos)
@@ -574,11 +534,7 @@ impl<'a> CsvParser<'a> {
         let mmaped_slice = Self::trim_ascii(&mmaped[next_pos..]);
         // Calculate total lines read
         let length = std::thread::scope(|scope| {
-            Self::get_total_lines_in_a_file(
-                mmaped_slice,
-                scope,
-                total_threads,
-            )
+            Self::get_total_lines_in_a_file(mmaped_slice, scope, total_threads)
         });
         let c = length.iter().fold(0, |prev, curr| prev + curr.0) - 1;
 
