@@ -16,7 +16,7 @@ fn main() {
     let str2 = "../playground/ML_AI/ML/Projects/modified_array/Data8277.csv";
 
     let t = std::time::Instant::now();
-    let fd = CsvParser::parse_multi_threaded(str2, 8);
+    let fd = CsvParser::parse_multi_threaded(str, 1);
     println!("Time: {}ms {}", t.elapsed().as_millis(), fd.len());
 
     fd.iter().take(20).for_each(|c| println!("{:?}", c));

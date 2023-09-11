@@ -233,109 +233,6 @@ impl<'a> CsvParser<'a> {
         mut_slices
     }
 
-    /// Parse content total lines from the file
-    #[allow(unused_assignments)]
-    fn parse_content(&mut self, offset_from_scanner: usize) -> Vector<Cell> {
-        // Column data
-        let mut column_data: Vector<Cell> = Vector::with_capacity(8);
-
-        let mut x = self
-            .byte_buffer
-            .iter()
-            .enumerate()
-            .skip(offset_from_scanner + 1)
-            .skip_while(|(_, c)| **c == b'\r' || **c == b'\n');
-
-        let (next, _) = x.next().unwrap();
-        let mut skip_new_line = 0;
-
-        let (mut start, mut start_used, mut end, mut end_used, chunk_size) =
-            (0, true, 0, true, self.batch_size);
-
-        self.byte_buffer[next..]
-            .chunks(chunk_size)
-            .enumerate()
-            .for_each(|(chunk_index, buff)| {
-                let curr = chunk_index * chunk_size + next;
-
-                buff.iter().enumerate().for_each(|(new_idx, c)| {
-                    let index = curr + new_idx;
-
-                    self.state =
-                        ParseState::get_scan_state_from_data(self.state, *c);
-
-                    match self.state {
-                        // Scan start, get the current state based on the
-                        // current byte and iterator takes care of
-                        // rest accordingly
-                        ParseState::Start
-                        | ParseState::CellString
-                        | ParseState::CellDecimalStartWithPointRead
-                        | ParseState::CellNumberStart => {
-                            start = index;
-                            start_used = false;
-                            end_used = false;
-                        }
-
-                        ParseState::CellQuoteStart
-                        | ParseState::CellQuoteNumberStart
-                        | ParseState::CellQuoteDecimalStart
-                        | ParseState::CellQuoteDecimalCurrentWithPointRead => {
-                            start = index + 1;
-                            start_used = false;
-                            end_used = false;
-                        }
-
-                        // Scan start of quoted header string,
-                        // read till the end of quote.
-                        ParseState::CellNumberEnd
-                        | ParseState::CellDecimalEnd
-                        | ParseState::CellDecimalEndWithPointRead
-                        | ParseState::CellSep
-                        | ParseState::NewLine => {
-                            if !end_used {
-                                end = index;
-                                end_used = true;
-                            }
-                            let push_value = unsafe {
-                                if !start_used {
-                                    let str_slice =
-                                        core::str::from_utf8_unchecked(
-                                            &self.byte_buffer[start..end],
-                                        );
-
-                                    Self::convert_from_slice(
-                                        str_slice, self.state,
-                                    )
-                                } else {
-                                    Cell::Null
-                                }
-                            };
-
-                            if self.state != ParseState::NewLine {
-                                (start_used, end_used) = (true, true);
-                                column_data.push(push_value);
-                            } else {
-                                skip_new_line += 1;
-                            }
-                        }
-
-                        ParseState::CellQuoteEnd
-                        | ParseState::CellQuoteNumberEnd
-                        | ParseState::CellQuoteDecimalEnd
-                        | ParseState::CellQuoteDecimalEndWithPointRead => {
-                            end = index;
-                            end_used = true;
-                        }
-                        // Scan as it is
-                        _ => {}
-                    }
-                });
-            });
-
-        column_data
-    }
-
     /// Get total lines from the file
     #[allow(unused_assignments)]
     fn parse_content_on_buffer(&mut self, column_data: &mut [Cell]) {
@@ -343,7 +240,7 @@ impl<'a> CsvParser<'a> {
         let (mut start, mut start_used, mut end, mut end_used, chunk_size) =
             (0, true, 0, true, self.batch_size);
 
-        let (mut arr_index, mut skip_new_line) = (0, 0);
+        let mut arr_index = 0;
 
         self.byte_buffer.chunks(chunk_size).enumerate().for_each(
             |(idx, buff)| {
@@ -369,10 +266,11 @@ impl<'a> CsvParser<'a> {
                             end_used = false;
                         }
 
+                        // Starting quoted values,
                         ParseState::CellQuoteStart
                         | ParseState::CellQuoteNumberStart
                         | ParseState::CellQuoteDecimalStart
-                        | ParseState::CellQuoteDecimalCurrentWithPointRead => {
+                        | ParseState::CellQuoteDecimalStartWithPointRead => {
                             start = index + 1;
                             start_used = false;
                             end_used = false;
@@ -417,8 +315,10 @@ impl<'a> CsvParser<'a> {
                         | ParseState::CellQuoteNumberEnd
                         | ParseState::CellQuoteDecimalEnd
                         | ParseState::CellQuoteDecimalEndWithPointRead => {
-                            end = index;
-                            end_used = true;
+                            if !end_used {
+                                end = index;
+                                end_used = true;
+                            }
                         }
 
                         // Scan as it is
@@ -445,6 +345,9 @@ impl<'a> CsvParser<'a> {
 
     /// Returns total lines with starting point and ending point
     /// of the buffer to be read.
+    ///
+    /// ## Note
+    /// Not accurate, should also work for multi-lined cell.
     fn get_total_lines_in_a_file<'c>(
         mmaped_buffer: &'c [u8],
         scope: &'c Scope<'c, '_>,

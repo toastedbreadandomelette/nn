@@ -75,151 +75,267 @@ pub enum ParseState {
     SkipChar,
     /// Skip whitespace within cell
     SkippedStartWhitespace,
-    /// Skip whitespace but assume might be the end
-    SkippedAssumeEndWhitespace,
+    /// Skip whitespace but assume read might be the end of cell
+    /// for certain said state that is recorded.
+    SkippedAssumeEndWhitespace(PrevState),
     /// Reading new line character
     NewLine,
     /// File end
     EndFile,
 }
 
+#[allow(unused)]
+#[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
+pub enum PrevState {
+    /// Start of parsing section
+    Start,
+
+    /// Cell value start, which is a string
+    CellString,
+    /// Cell value, which is a string
+    CellCurrent,
+
+    /// Cell quote start, which is a string
+    CellQuoteStart,
+    /// Cell quote body, which is a string
+    CellQuoteCurrent,
+    /// Cell quote end, which is a string
+    CellQuoteEnd,
+
+    /// Cell quote start, which is a number
+    CellQuoteNumberStart,
+    /// Cell quote body, which is a number
+    CellQuoteNumberCurrent,
+    /// Cell quote end, which is a number
+    CellQuoteNumberEnd,
+
+    /// Cell quote start, which is a number
+    CellQuoteDecimalStart,
+    /// Cell quote body, which is a number
+    CellQuoteDecimalCurrent,
+    /// Cell quote end, which is a number
+    CellQuoteDecimalEnd,
+
+    /// Start reading number
+    CellNumberStart,
+    /// Reading number
+    CellNumberCurrent,
+    /// End reading number
+    CellNumberEnd,
+
+    /// Start reading decimal number
+    CellDecimalStart,
+    /// Read decimal number
+    CellDecimalCurrent,
+    /// End reading decimal number
+    CellDecimalEnd,
+
+    /// Read decimal number with decimal point read
+    CellDecimalStartWithPointRead,
+    /// Read decimal number with decimal point read
+    CellDecimalCurrentWithPointRead,
+    /// Read decimal number with decimal point read
+    CellDecimalEndWithPointRead,
+
+    /// Read decimal number with decimal point read
+    CellQuoteDecimalStartWithPointRead,
+    /// Read decimal number with decimal point read
+    CellQuoteDecimalCurrentWithPointRead,
+    /// Read decimal number with decimal point read
+    CellQuoteDecimalEndWithPointRead,
+
+    /// Read separator
+    CellSep,
+    /// Skip character
+    SkipChar,
+    /// Reading new line character
+    NewLine,
+    /// File end
+    EndFile,
+}
+
+impl PrevState {
+    pub fn get_end_of_parse_state(initial_state: Self) -> ParseState {
+        match initial_state {
+            Self::CellString | Self::CellCurrent => ParseState::CellSep,
+
+            Self::CellDecimalStart
+            | Self::CellDecimalCurrent
+            | Self::CellDecimalEnd => ParseState::CellDecimalEnd,
+
+            Self::CellDecimalCurrentWithPointRead
+            | Self::CellDecimalEndWithPointRead
+            | Self::CellDecimalStartWithPointRead => {
+                ParseState::CellDecimalEndWithPointRead
+            }
+
+            Self::CellNumberStart
+            | Self::CellNumberCurrent
+            | Self::CellNumberEnd => ParseState::CellNumberEnd,
+
+            Self::CellQuoteStart
+            | Self::CellQuoteCurrent
+            | Self::CellQuoteEnd => ParseState::CellQuoteEnd,
+
+            Self::CellQuoteDecimalStart
+            | Self::CellQuoteDecimalCurrent
+            | Self::CellQuoteDecimalEnd => ParseState::CellQuoteDecimalEnd,
+
+            Self::CellQuoteDecimalStartWithPointRead
+            | Self::CellQuoteDecimalCurrentWithPointRead
+            | Self::CellQuoteDecimalEndWithPointRead => {
+                ParseState::CellQuoteDecimalEndWithPointRead
+            }
+
+            Self::CellQuoteNumberStart
+            | Self::CellQuoteNumberCurrent
+            | Self::CellQuoteNumberEnd => ParseState::CellQuoteNumberEnd,
+
+            Self::CellSep => ParseState::CellSep,
+            Self::EndFile => ParseState::EndFile,
+            Self::NewLine => ParseState::NewLine,
+            Self::SkipChar => ParseState::SkipChar,
+            Self::Start => ParseState::Start, // _ => ParseState::CellCurrent
+        }
+    }
+}
+
 impl ParseState {
     /// Handle transition to states when current state is
     /// reading a decimal value
     #[inline(always)]
-    const fn handle_decimal_state(initial_state: ParseState) -> ParseState {
+    fn handle_decimal_state(initial_state: Self) -> Self {
         match initial_state {
-            ParseState::CellNumberCurrent | ParseState::CellNumberStart => {
-                ParseState::CellDecimalCurrentWithPointRead
+            Self::CellNumberCurrent | Self::CellNumberStart => {
+                Self::CellDecimalCurrentWithPointRead
             }
 
-            ParseState::CellQuoteStart => {
-                ParseState::CellQuoteDecimalStartWithPointRead
-            }
+            Self::CellQuoteStart => Self::CellQuoteDecimalStartWithPointRead,
 
-            ParseState::CellQuoteCurrent => ParseState::CellQuoteCurrent,
+            Self::CellQuoteCurrent => Self::CellQuoteCurrent,
 
             // While reading potential number, switch to
             // potential quoted decimal number
-            ParseState::CellQuoteNumberStart
-            | ParseState::CellQuoteNumberCurrent => {
-                ParseState::CellQuoteDecimalCurrentWithPointRead
+            Self::CellQuoteNumberStart | Self::CellQuoteNumberCurrent => {
+                Self::CellQuoteDecimalCurrentWithPointRead
             }
 
             // If quoted decimal is already acknowledged, then it's not
             // a decimal value, but a quoted string
-            ParseState::CellQuoteDecimalStartWithPointRead
-            | ParseState::CellQuoteDecimalCurrentWithPointRead => {
-                ParseState::CellQuoteCurrent
+            Self::CellQuoteDecimalStartWithPointRead
+            | Self::CellQuoteDecimalCurrentWithPointRead => {
+                Self::CellQuoteCurrent
             }
 
             // If decimal is already acknowledged, then it's not
             // a decimal value, but a string
-            ParseState::CellString
-            | ParseState::CellDecimalStartWithPointRead
-            | ParseState::CellDecimalCurrentWithPointRead
-            | ParseState::CellCurrent => ParseState::CellCurrent,
+            Self::CellString
+            | Self::CellDecimalStartWithPointRead
+            | Self::CellDecimalCurrentWithPointRead
+            | Self::CellCurrent => Self::CellCurrent,
 
-            _ => ParseState::CellDecimalStartWithPointRead,
+            Self::SkippedAssumeEndWhitespace(_) => Self::CellCurrent,
+
+            _ => Self::CellDecimalStartWithPointRead,
         }
     }
 
     /// Handle transition to states when current state is
     /// reading certain value
     #[inline(always)]
-    const fn handle_default(initial_state: ParseState) -> ParseState {
+    fn handle_default(initial_state: Self) -> Self {
         match initial_state {
             // If quoted, continue reading.
-            ParseState::CellQuoteStart | ParseState::CellQuoteCurrent => {
-                ParseState::CellQuoteCurrent
+            Self::CellQuoteStart | Self::CellQuoteCurrent => {
+                Self::CellQuoteCurrent
             }
 
             // Does matter iff any special number, switch to
             // normal non-quoted string.
-            ParseState::CellString
-            | ParseState::CellCurrent
-            | ParseState::CellNumberCurrent
-            | ParseState::CellDecimalCurrent
-            | ParseState::CellDecimalStartWithPointRead
-            | ParseState::CellDecimalCurrentWithPointRead
-            | ParseState::CellQuoteDecimalStartWithPointRead
-            | ParseState::CellQuoteDecimalCurrentWithPointRead => {
-                ParseState::CellCurrent
-            }
+            Self::CellString
+            | Self::CellCurrent
+            | Self::CellNumberCurrent
+            | Self::CellDecimalCurrent
+            | Self::CellDecimalStartWithPointRead
+            | Self::CellDecimalCurrentWithPointRead
+            | Self::CellQuoteDecimalStartWithPointRead
+            | Self::CellQuoteDecimalCurrentWithPointRead => Self::CellCurrent,
 
-            _ => ParseState::CellString,
+            Self::SkippedAssumeEndWhitespace(_) => Self::CellCurrent,
+
+            _ => Self::CellString,
         }
     }
 
     /// Handle transition to states when current state is
     /// reading separator
     #[inline(always)]
-    const fn handle_separator(initial_state: ParseState) -> ParseState {
+    fn handle_separator(initial_state: Self) -> Self {
         match initial_state {
             // Any quoted values defaults to quoted string, knowing
             // that separator is read.
-            ParseState::CellQuoteCurrent
-            | ParseState::CellQuoteStart
-            | ParseState::CellQuoteDecimalCurrent
-            | ParseState::CellQuoteDecimalStart
-            | ParseState::CellQuoteDecimalStartWithPointRead
-            | ParseState::CellQuoteDecimalCurrentWithPointRead => {
-                ParseState::CellQuoteCurrent
+            Self::CellQuoteCurrent
+            | Self::CellQuoteStart
+            | Self::CellQuoteDecimalCurrent
+            | Self::CellQuoteDecimalStart
+            | Self::CellQuoteDecimalStartWithPointRead
+            | Self::CellQuoteDecimalCurrentWithPointRead => {
+                Self::CellQuoteCurrent
             }
 
-            ParseState::CellNumberCurrent | ParseState::CellNumberStart => {
-                ParseState::CellNumberEnd
+            Self::CellNumberCurrent | Self::CellNumberStart => {
+                Self::CellNumberEnd
             }
 
-            ParseState::CellDecimalCurrent
-            | ParseState::CellDecimalStart
-            | ParseState::CellDecimalStartWithPointRead
-            | ParseState::CellDecimalCurrentWithPointRead => {
-                ParseState::CellDecimalEnd
+            Self::CellDecimalCurrent
+            | Self::CellDecimalStart
+            | Self::CellDecimalStartWithPointRead
+            | Self::CellDecimalCurrentWithPointRead => Self::CellDecimalEnd,
+
+            Self::SkippedAssumeEndWhitespace(v) => {
+                PrevState::get_end_of_parse_state(v)
             }
 
-            _ => ParseState::CellSep,
+            _ => Self::CellSep,
         }
     }
 
     #[inline(always)]
-    const fn handle_number(initial_state: ParseState) -> ParseState {
+    fn handle_number(initial_state: Self) -> Self {
         match initial_state {
-            ParseState::CellQuoteDecimalStartWithPointRead
-            | ParseState::CellQuoteDecimalCurrentWithPointRead => {
-                ParseState::CellQuoteDecimalCurrentWithPointRead
+            Self::CellQuoteDecimalStartWithPointRead
+            | Self::CellQuoteDecimalCurrentWithPointRead => {
+                Self::CellQuoteDecimalCurrentWithPointRead
             }
 
-            ParseState::CellQuoteStart
-            | ParseState::CellQuoteNumberStart
-            | ParseState::CellQuoteNumberCurrent => {
-                ParseState::CellQuoteNumberCurrent
+            Self::CellQuoteStart
+            | Self::CellQuoteNumberStart
+            | Self::CellQuoteNumberCurrent => Self::CellQuoteNumberCurrent,
+
+            Self::CellQuoteCurrent => Self::CellQuoteCurrent,
+
+            Self::CellNumberCurrent | Self::CellNumberStart => {
+                Self::CellNumberCurrent
             }
 
-            ParseState::CellQuoteCurrent => ParseState::CellQuoteCurrent,
-
-            ParseState::CellNumberCurrent | ParseState::CellNumberStart => {
-                ParseState::CellNumberCurrent
+            Self::CellDecimalStartWithPointRead
+            | Self::CellDecimalCurrentWithPointRead => {
+                Self::CellDecimalCurrentWithPointRead
             }
 
-            ParseState::CellDecimalStartWithPointRead
-            | ParseState::CellDecimalCurrentWithPointRead => {
-                ParseState::CellDecimalCurrentWithPointRead
+            Self::CellDecimalCurrent | Self::CellDecimalStart => {
+                Self::CellDecimalCurrent
             }
 
-            ParseState::CellDecimalCurrent | ParseState::CellDecimalStart => {
-                ParseState::CellDecimalCurrent
-            }
+            Self::CellString | Self::CellCurrent => Self::CellCurrent,
 
-            ParseState::CellString | ParseState::CellCurrent => {
-                ParseState::CellCurrent
-            }
+            Self::SkippedAssumeEndWhitespace(_) => Self::CellCurrent,
 
-            _ => ParseState::CellNumberStart,
+            _ => Self::CellNumberStart,
         }
     }
 
-    /// Evaluate next state `ParseState` given the `initial_state`
+    /// Evaluate next state `Self` given the `initial_state`
     /// and knowing that character is end line.
     ///
     /// Jump from
@@ -230,70 +346,110 @@ impl ParseState {
     /// ```
     ///
     #[inline(always)]
-    const fn handle_lf(initial_state: ParseState, c: u8) -> ParseState {
+    fn handle_lf(initial_state: Self, c: u8) -> Self {
         match initial_state {
             // Starting with quote and running into new-line characters
             // should default to normal quoted string.
-            ParseState::CellQuoteCurrent
-            | ParseState::CellQuoteStart
-            | ParseState::CellQuoteDecimalCurrent
-            | ParseState::CellQuoteDecimalStart
-            | ParseState::CellQuoteDecimalStartWithPointRead
-            | ParseState::CellQuoteDecimalCurrentWithPointRead => {
-                ParseState::CellQuoteCurrent
+            Self::CellQuoteCurrent
+            | Self::CellQuoteStart
+            | Self::CellQuoteDecimalCurrent
+            | Self::CellQuoteDecimalStart
+            | Self::CellQuoteDecimalStartWithPointRead
+            | Self::CellQuoteDecimalCurrentWithPointRead => {
+                Self::CellQuoteCurrent
             }
 
-            ParseState::CellNumberCurrent | ParseState::CellNumberStart => {
-                ParseState::CellNumberEnd
+            Self::CellNumberCurrent | Self::CellNumberStart => {
+                Self::CellNumberEnd
             }
 
-            ParseState::CellDecimalCurrent
-            | ParseState::CellDecimalStart
-            | ParseState::CellDecimalStartWithPointRead
-            | ParseState::CellDecimalCurrentWithPointRead => {
-                ParseState::CellDecimalEnd
+            Self::CellDecimalCurrent
+            | Self::CellDecimalStart
+            | Self::CellDecimalStartWithPointRead
+            | Self::CellDecimalCurrentWithPointRead => Self::CellDecimalEnd,
+
+            Self::SkippedAssumeEndWhitespace(v) => {
+                if c == b'\r' {
+                    PrevState::get_end_of_parse_state(v)
+                } else {
+                    Self::NewLine
+                }
             }
 
             _ => {
                 if c == b'\r' {
-                    ParseState::CellSep
+                    Self::CellSep
                 } else {
-                    ParseState::NewLine
+                    Self::NewLine
                 }
             }
         }
     }
 
     #[inline(always)]
-    const fn handle_quotes(initial_state: ParseState) -> ParseState {
+    fn handle_quotes(initial_state: Self) -> Self {
         match initial_state {
             // If previous started or running, end the values
-            ParseState::CellQuoteStart | ParseState::CellQuoteCurrent => {
-                ParseState::CellQuoteEnd
+            Self::CellQuoteStart | Self::CellQuoteCurrent => Self::CellQuoteEnd,
+            Self::CellQuoteDecimalStart | Self::CellQuoteDecimalCurrent => {
+                Self::CellQuoteDecimalEnd
             }
-            ParseState::CellQuoteDecimalStart
-            | ParseState::CellQuoteDecimalCurrent => {
-                ParseState::CellQuoteDecimalEnd
+            Self::CellQuoteDecimalStartWithPointRead
+            | Self::CellQuoteDecimalCurrentWithPointRead => {
+                Self::CellQuoteDecimalEndWithPointRead
             }
-            ParseState::CellQuoteDecimalStartWithPointRead
-            | ParseState::CellQuoteDecimalCurrentWithPointRead => {
-                ParseState::CellQuoteDecimalEndWithPointRead
+
+            Self::SkippedAssumeEndWhitespace(v) => {
+                PrevState::get_end_of_parse_state(v)
             }
-            _ => ParseState::CellQuoteStart,
+            _ => Self::CellQuoteStart,
         }
     }
 
-    /// Evaluate next state `ParseState` given the `initial_state`
+    #[inline(always)]
+    fn handle_white_space(initial_state: Self) -> Self {
+        match initial_state {
+            // Immediately after cell separator, assume
+            // that cell has unwanted whitespace
+            Self::CellSep | Self::SkippedStartWhitespace => {
+                Self::SkippedStartWhitespace
+            }
+
+            // Quoted does not change their state unless numbered
+            // If whitespace is found, assume that it is string.
+            // just use state of current
+            Self::CellQuoteStart
+            | Self::CellQuoteCurrent
+            | Self::CellQuoteNumberStart
+            | Self::CellQuoteDecimalStart
+            | Self::CellQuoteNumberCurrent
+            | Self::CellQuoteDecimalCurrent
+            | Self::CellQuoteDecimalStartWithPointRead
+            | Self::CellQuoteDecimalCurrentWithPointRead => {
+                Self::CellQuoteCurrent
+            }
+
+            // If number read, assume that it is the end
+            Self::CellNumberStart | Self::CellNumberCurrent => {
+                Self::SkippedAssumeEndWhitespace(PrevState::CellNumberCurrent)
+            }
+
+            Self::SkippedAssumeEndWhitespace(v) => {
+                Self::SkippedAssumeEndWhitespace(v)
+            }
+
+            _ => Self::SkippedStartWhitespace,
+        }
+    }
+
+    /// Evaluate next state `Self` given the `initial_state`
     /// and the `byte`.
     ///
     /// ## To Do
     /// - Handle for generic separator
     /// - Maybe move from byte to char or byte sequence
     #[inline]
-    pub const fn get_scan_state_from_data(
-        initial_state: ParseState,
-        c: u8,
-    ) -> ParseState {
+    pub fn get_scan_state_from_data(initial_state: Self, c: u8) -> Self {
         match c {
             // If quote is started, end it else start the quote
             b'"' => Self::handle_quotes(initial_state),
@@ -308,7 +464,8 @@ impl ParseState {
             b',' => Self::handle_separator(initial_state),
 
             b'\r' | b'\n' => Self::handle_lf(initial_state, c),
-            // b' ' => ParseState::SkippedStartWhitespace,
+            // b' ' => Self::SkippedStartWhitespace,
+            b' ' => Self::handle_white_space(initial_state),
             _ => Self::handle_default(initial_state),
         }
     }
