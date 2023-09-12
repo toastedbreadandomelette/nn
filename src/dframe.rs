@@ -1,7 +1,7 @@
 use vector::Vector;
 
 use crate::cell::{Cell, CellType};
-use crate::iter::*;
+use crate::iter::{dframe_iter::DataFrameIterator, DataFrameColumnIterator};
 
 /// A generic cell for storing parsed data.
 pub struct DataFrame {

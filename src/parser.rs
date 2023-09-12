@@ -55,17 +55,6 @@ impl<'a> CsvParser<'a> {
     }
 
     #[inline(always)]
-    pub fn with_batch_size(mut self, batch_size: usize) -> Self {
-        self.batch_size = batch_size;
-        self
-    }
-
-    #[inline(always)]
-    pub fn set_batch_size(&mut self, batch_size: usize) {
-        self.batch_size = batch_size;
-    }
-
-    #[inline(always)]
     const fn scan_start(&self) -> ParseState {
         match self.get_curr_byte() {
             Some(b'"') => ParseState::HeaderQuoteStart,
@@ -292,8 +281,10 @@ impl<'a> CsvParser<'a> {
                                 let start_point = start.unwrap_or(index);
                                 unsafe {
                                     if start_point != end_point {
-                                        let slice = &self.byte_buffer
-                                            [start_point..end_point];
+                                        let slice = Self::trim_ascii(
+                                            &self.byte_buffer
+                                                [start_point..end_point],
+                                        );
                                         let str_slice =
                                             core::str::from_utf8_unchecked(
                                                 slice,
@@ -317,6 +308,11 @@ impl<'a> CsvParser<'a> {
                                 arr_index += 1;
                             }
                         }
+
+                        // ParseState::SkippedAssumeEndWhitespace(assumed_store_state) => {
+                        //     // end = Some(index);
+                        //     // save_state = Some(PrevState::get_end_of_parse_state(assumed_store_state));
+                        // }
                         // Scan start of quoted header string,
                         // read till the end of quote.
                         ParseState::CellQuoteEnd
@@ -411,7 +407,12 @@ impl<'a> CsvParser<'a> {
     /// Parsing CSV file `file_name` using multiple threads
     ///
     /// Opens the file in memory mapped IO (read-only) and collects the data
-    /// on the memory, to be used later via [`DataFrame`] struct
+    /// on the memory, to be used later via `DataFrame` struct
+    /// 
+    /// To do: Parsing on different strategies: Do either
+    /// 1. Read alternate lines 
+    /// 2. Read batch lines 
+    ///     - (challenge: seeking starting point to valid new line)
     pub fn parse_multi_threaded(
         file_name: &'a str,
         total_threads: usize,
