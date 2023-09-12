@@ -237,8 +237,12 @@ impl<'a> CsvParser<'a> {
     #[allow(unused_assignments)]
     fn parse_content_on_buffer(&mut self, column_data: &mut [Cell]) {
         // Column data
-        let (mut start, mut start_used, mut end, mut end_used, chunk_size) =
-            (0, true, 0, true, self.batch_size);
+        let (mut start, mut end, chunk_size): (
+            Option<usize>,
+            Option<usize>,
+            _,
+        ) = (None, None, self.batch_size);
+        let mut save_state = None;
 
         let mut arr_index = 0;
 
@@ -261,9 +265,7 @@ impl<'a> CsvParser<'a> {
                         | ParseState::CellString
                         | ParseState::CellDecimalStartWithPointRead
                         | ParseState::CellNumberStart => {
-                            start = index;
-                            start_used = false;
-                            end_used = false;
+                            start = Some(index);
                         }
 
                         // Starting quoted values,
@@ -271,9 +273,7 @@ impl<'a> CsvParser<'a> {
                         | ParseState::CellQuoteNumberStart
                         | ParseState::CellQuoteDecimalStart
                         | ParseState::CellQuoteDecimalStartWithPointRead => {
-                            start = index + 1;
-                            start_used = false;
-                            end_used = false;
+                            start = Some(index + 1);
                         }
 
                         // Scan start of quoted header string,
@@ -282,27 +282,35 @@ impl<'a> CsvParser<'a> {
                         | ParseState::CellDecimalEnd
                         | ParseState::CellSep
                         | ParseState::NewLine => {
-                            if !end_used {
-                                end = index;
-                                end_used = true;
-                            }
-                            let push_value = unsafe {
-                                if !start_used {
-                                    let str_slice =
-                                        core::str::from_utf8_unchecked(
-                                            &self.byte_buffer[start..end],
-                                        );
+                            let push_value = if end.is_none() && start.is_none()
+                            {
+                                Cell::Null
+                            } else {
+                                let end_point = end.unwrap_or(index);
+                                let save_state_as =
+                                    save_state.unwrap_or(self.state);
+                                let start_point = start.unwrap_or(index);
+                                unsafe {
+                                    if start_point != end_point {
+                                        let slice = &self.byte_buffer
+                                            [start_point..end_point];
+                                        let str_slice =
+                                            core::str::from_utf8_unchecked(
+                                                slice,
+                                            );
+                                        // println!("{end_point:?} {start_point:?} {save_state_as:?} {str_slice:?}");
 
-                                    Self::convert_from_slice(
-                                        str_slice, self.state,
-                                    )
-                                } else {
-                                    Cell::Null
+                                        Self::convert_from_slice(
+                                            str_slice,
+                                            save_state_as,
+                                        )
+                                    } else {
+                                        Cell::Null
+                                    }
                                 }
                             };
-
                             if self.state != ParseState::NewLine {
-                                (start_used, end_used) = (true, true);
+                                (start, end, save_state) = (None, None, None);
                                 if arr_index < column_data.len() {
                                     column_data[arr_index] = push_value;
                                 }
@@ -315,10 +323,8 @@ impl<'a> CsvParser<'a> {
                         | ParseState::CellQuoteNumberEnd
                         | ParseState::CellQuoteDecimalEnd
                         | ParseState::CellQuoteDecimalEndWithPointRead => {
-                            if !end_used {
-                                end = index;
-                                end_used = true;
-                            }
+                            end = Some(index);
+                            save_state = Some(self.state);
                         }
 
                         // Scan as it is
