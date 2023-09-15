@@ -194,8 +194,6 @@ impl<'a> CsvParser<'a> {
         // Total length of the slice with multiplied .
         // Size of each slice: divided evenly
         // with remainder slice
-        // let (size_of_each_slice, size_of_rem_slice) =
-        //     (total_len / split, total_len % split);
 
         // Create array of slices for new array
         // with tracking start pointer
@@ -409,7 +407,7 @@ impl<'a> CsvParser<'a> {
     /// Opens the file in memory mapped IO (read-only) and collects the data
     /// on the memory, to be used later via `DataFrame` struct
     /// 
-    /// To do: Parsing on different strategies: Do either
+    /// To do: Selecting different strategies for parsing: Do either
     /// 1. Read alternate lines 
     /// 2. Read batch lines 
     ///     - (challenge: seeking starting point to valid new line)
