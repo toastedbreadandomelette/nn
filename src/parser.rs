@@ -238,7 +238,6 @@ impl<'a> CsvParser<'a> {
                 let curr = idx * chunk_size;
 
                 buff.iter().enumerate().for_each(|(new_idx, c)| {
-                    // if skip_new_line == self.id {
                     let index = curr + new_idx;
 
                     self.state =
@@ -287,7 +286,6 @@ impl<'a> CsvParser<'a> {
                                             core::str::from_utf8_unchecked(
                                                 slice,
                                             );
-                                        // println!("{end_point:?} {start_point:?} {save_state_as:?} {str_slice:?}");
 
                                         Self::convert_from_slice(
                                             str_slice,
@@ -307,10 +305,6 @@ impl<'a> CsvParser<'a> {
                             }
                         }
 
-                        // ParseState::SkippedAssumeEndWhitespace(assumed_store_state) => {
-                        //     // end = Some(index);
-                        //     // save_state = Some(PrevState::get_end_of_parse_state(assumed_store_state));
-                        // }
                         // Scan start of quoted header string,
                         // read till the end of quote.
                         ParseState::CellQuoteEnd
@@ -410,7 +404,8 @@ impl<'a> CsvParser<'a> {
     /// To do: Selecting different strategies for parsing: Do either
     /// 1. Read alternate lines 
     /// 2. Read batch lines 
-    ///     - (challenge: seeking starting point to valid new line)
+    ///     - (challenge: seeking starting point to valid new line,
+    ///        so this part is incomplete)
     pub fn parse_multi_threaded(
         file_name: &'a str,
         total_threads: usize,
@@ -484,6 +479,7 @@ impl<'a> CsvParser<'a> {
     ///
     /// Opens the file in memory mapped IO (read-only) and
     /// collects the data from file
+    #[inline]
     pub fn parse(file_name: &'a str) -> DataFrame {
         Self::parse_multi_threaded(file_name, 1)
     }

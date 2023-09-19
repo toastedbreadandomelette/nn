@@ -46,6 +46,7 @@ impl DataFrame {
 
     /// Column iterator for the array.
     /// Returns the iterator if column exists
+    #[inline(always)]
     pub fn iter_col(&self, col: &str) -> Option<DataFrameColumnIterator> {
         let index = self.header.iter().position(|c| c == col)?;
 
