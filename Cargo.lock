@@ -33,7 +33,13 @@ version = "0.1.0"
 dependencies = [
  "memmap",
  "memmap2",
+ "vector",
 ]
+
+[[package]]
+name = "vector"
+version = "0.1.0"
+source = "git+https://github.com/toastedbreadandomelette/vector-rs?branch=master#2d54f3f27679d5117f3f25e5eff8d2b53f522a8b"
 
 [[package]]
 name = "winapi"

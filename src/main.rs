@@ -1,6 +1,6 @@
 use parser::CsvParser;
 
-extern crate vector;
+// extern crate vector;
 
 mod cell;
 mod dframe;

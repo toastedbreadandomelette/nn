@@ -10,7 +10,4 @@ opt-level = 2
 [dependencies]
 memmap = "0.7.0"
 memmap2 = "0.5.10"
-
-[lib]
-name = "vector"
-path = "./src/vector/src/lib.rs"
+vector = { git = "https://github.com/toastedbreadandomelette/vector-rs", branch = "master" }
