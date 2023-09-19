@@ -13,4 +13,4 @@ memmap2 = "0.5.10"
 
 [lib]
 name = "vector"
-path = "src/vector/src/lib.rs"
+path = "./src/vector/src/lib.rs"
