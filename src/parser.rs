@@ -1,7 +1,7 @@
 use crate::parse_state::ParseState;
 use std::thread::Scope;
 
-use crate::cell::Cell;
+use crate::cell::{Cell, CellType};
 use crate::dframe::DataFrame;
 use vector::Vector;
 
@@ -160,20 +160,20 @@ impl<'a> CsvParser<'a> {
     }
 
     #[inline]
-    fn convert_from_slice(slice: &str, state: ParseState) -> Cell {
+    fn convert_from_slice(slice: &str, state: ParseState) -> (Cell, CellType) {
         match state {
             ParseState::CellNumberEnd | ParseState::CellQuoteNumberEnd => {
-                Cell::Number(slice.parse::<i64>().unwrap())
+                (Cell::Number(slice.parse::<i64>().unwrap()), CellType::I64)
             }
 
             ParseState::CellDecimalEnd
             | ParseState::CellDecimalEndWithPointRead
             | ParseState::CellQuoteDecimalEnd
             | ParseState::CellQuoteDecimalEndWithPointRead => {
-                Cell::Decimal(slice.parse::<f64>().unwrap())
+                (Cell::Decimal(slice.parse::<f64>().unwrap()), CellType::F64)
             }
 
-            _ => Cell::String(slice.to_owned()),
+            _ => (Cell::String(slice.to_owned()), CellType::String),
         }
     }
 
@@ -220,9 +220,45 @@ impl<'a> CsvParser<'a> {
         mut_slices
     }
 
+    #[inline(always)]
+    pub fn aggregate_from_null(curr: CellType) -> CellType {
+        curr
+    }
+
+    #[inline(always)]
+    pub fn aggregate_from_f64(curr: CellType) -> CellType {
+        match curr {
+            CellType::String => CellType::String,
+            _ => CellType::F64,
+        }
+    }
+
+    #[inline(always)]
+    pub fn aggregate_from_i64(curr: CellType) -> CellType {
+        match curr {
+            CellType::F64 => CellType::F64,
+            CellType::String => CellType::String,
+            _ => CellType::I64,
+        }
+    }
+
+    #[inline(always)]
+    pub fn agg_type(aggregate_type: CellType, curr: CellType) -> CellType {
+        match aggregate_type {
+            CellType::Null => Self::aggregate_from_null(curr),
+            CellType::F64 => Self::aggregate_from_f64(curr),
+            CellType::I64 => Self::aggregate_from_i64(curr),
+            _ => CellType::String,
+        }
+    }
+
     /// Get total lines from the file
     #[allow(unused_assignments)]
-    fn parse_content_on_buffer(&mut self, column_data: &mut [Cell]) {
+    fn parse_content_on_buffer(
+        &mut self,
+        column_data: &mut [Cell],
+        res_type: &mut [CellType],
+    ) {
         // Column data
         let (mut start, mut end, chunk_size): (
             Option<usize>,
@@ -268,38 +304,45 @@ impl<'a> CsvParser<'a> {
                         | ParseState::CellDecimalEnd
                         | ParseState::CellSep
                         | ParseState::NewLine => {
-                            let push_value = if end.is_none() && start.is_none()
-                            {
-                                Cell::Null
-                            } else {
-                                let end_point = end.unwrap_or(index);
-                                let save_state_as =
-                                    save_state.unwrap_or(self.state);
-                                let start_point = start.unwrap_or(index);
-                                unsafe {
-                                    if start_point != end_point {
-                                        let slice = Self::trim_ascii(
-                                            &self.byte_buffer
-                                                [start_point..end_point],
-                                        );
-                                        let str_slice =
-                                            core::str::from_utf8_unchecked(
-                                                slice,
-                                            );
+                            let (push_value, result_type) =
+                                if end.is_none() && start.is_none() {
+                                    (Cell::Null, CellType::Null)
+                                } else {
+                                    let end_point = end.unwrap_or(index);
+                                    let save_state_as =
+                                        save_state.unwrap_or(self.state);
+                                    let start_point = start.unwrap_or(index);
 
-                                        Self::convert_from_slice(
-                                            str_slice,
-                                            save_state_as,
-                                        )
-                                    } else {
-                                        Cell::Null
+                                    unsafe {
+                                        if start_point != end_point {
+                                            let slice = Self::trim_ascii(
+                                                &self.byte_buffer
+                                                    [start_point..end_point],
+                                            );
+                                            let str_slice =
+                                                core::str::from_utf8_unchecked(
+                                                    slice,
+                                                );
+
+                                            Self::convert_from_slice(
+                                                str_slice,
+                                                save_state_as,
+                                            )
+                                        } else {
+                                            (Cell::Null, CellType::Null)
+                                        }
                                     }
-                                }
-                            };
+                                };
                             if self.state != ParseState::NewLine {
                                 (start, end, save_state) = (None, None, None);
                                 if arr_index < column_data.len() {
                                     column_data[arr_index] = push_value;
+
+                                    let prev_type =
+                                        res_type[arr_index % res_type.len()];
+                                    let val =
+                                        Self::agg_type(prev_type, result_type);
+                                    res_type[arr_index % res_type.len()] = val;
                                 }
                                 arr_index += 1;
                             }
@@ -359,13 +402,13 @@ impl<'a> CsvParser<'a> {
 
         let mut slices: Vec<(&'c [u8], usize, usize)> =
             Vec::with_capacity(thread_number);
+
         slices.push((&mmaped_buffer[..end_prefix], 0, end_prefix));
 
         slices.extend((1..thread_number - 1).map(|multiplier| {
-            let start_pos = end_prefix + 1;
-            let spos = start_pos;
-
+            let spos = end_prefix + 1;
             let end_pos = (multiplier + 1) * slots_division;
+
             // Seek the start position to start from position next to \n
             let epos = mmaped_buffer[end_pos..]
                 .iter()
@@ -400,10 +443,10 @@ impl<'a> CsvParser<'a> {
     ///
     /// Opens the file in memory mapped IO (read-only) and collects the data
     /// on the memory, to be used later via `DataFrame` struct
-    /// 
+    ///
     /// To do: Selecting different strategies for parsing: Do either
-    /// 1. Read alternate lines 
-    /// 2. Read batch lines 
+    /// 1. Read alternate lines
+    /// 2. Read batch lines
     ///     - (challenge: seeking starting point to valid new line,
     ///        so this part is incomplete)
     pub fn parse_multi_threaded(
@@ -443,6 +486,8 @@ impl<'a> CsvParser<'a> {
 
         // Initialized result with zero value.
         let mut result: Vector<Cell> = Vector::zeroed(c * scanned_header.len());
+        let mut result_types: Vec<Vec<CellType>> =
+            vec![vec![CellType::Null; scanned_header.len()]; total_threads];
 
         // UNSAFE CALL: Creates multiple slices of vector `result` into smaller pieces,
         // since reallocating multiple vector or flattening is slower.
@@ -458,21 +503,35 @@ impl<'a> CsvParser<'a> {
             // To do: for each thread, start from offset just next to new line
             let mmaped2 = &mmaped_slice;
 
-            sliced_buffer.iter_mut().zip(length).enumerate().for_each(
-                |(_, (res, (len, start, end)))| {
+            sliced_buffer
+                .iter_mut()
+                .zip(result_types.iter_mut())
+                .zip(length)
+                .enumerate()
+                .for_each(|(_, ((res, res_types), (len, start, end)))| {
                     // Each thread is alloted a specific `non-overlapping` region of the
                     // slice in `result`, which is ensured by function `split_slices`
                     // The values are recorded in res.
                     debug_assert_eq!(res.len(), len * scanned_header.len());
+                    // let type_slice = &mut result_types[index][..];
                     scope.spawn(move || {
                         CsvParser::new(&mmaped2[start..end])
-                            .parse_content_on_buffer(res);
+                            .parse_content_on_buffer(res, &mut res_types[..]);
                     });
-                },
-            );
+                });
         });
 
-        DataFrame::new(result, scanned_header)
+        let res = result_types.iter_mut().fold(
+            vec![CellType::Null; scanned_header.len()],
+            |mut prev, arr| {
+                prev.iter_mut()
+                    .zip(arr)
+                    .for_each(|(p, c)| *p = Self::agg_type(*p, *c));
+                prev
+            },
+        );
+
+        DataFrame::new(result, scanned_header, res)
     }
 
     /// Parsing CSV file `file_name` using single thread
@@ -480,6 +539,7 @@ impl<'a> CsvParser<'a> {
     /// Opens the file in memory mapped IO (read-only) and
     /// collects the data from file
     #[inline]
+    #[allow(unused)]
     pub fn parse(file_name: &'a str) -> DataFrame {
         Self::parse_multi_threaded(file_name, 1)
     }

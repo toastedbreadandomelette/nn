@@ -15,12 +15,15 @@ pub struct DataFrame {
 
 impl DataFrame {
     /// Collects data from the parser only, should not be accessible to user
-    pub(super) fn new(column_data: Vector<Cell>, header: Vec<String>) -> Self {
-        let header_len = header.len();
+    pub(super) fn new(
+        column_data: Vector<Cell>,
+        header: Vec<String>,
+        dtype: Vec<CellType>,
+    ) -> Self {
         Self {
             column_data,
             header,
-            dtype: vec![CellType::I64; header_len],
+            dtype,
         }
     }
 
@@ -44,7 +47,14 @@ impl DataFrame {
         self.header.len()
     }
 
+    /// Header length of the Data Frame
+    #[inline(always)]
+    pub fn dtypes(&self) -> &[CellType] {
+        &self.dtype
+    }
+
     /// Column iterator for the array.
+    ///
     /// Returns the iterator if column exists
     #[inline(always)]
     pub fn iter_col(&self, col: &str) -> Option<DataFrameColumnIterator> {

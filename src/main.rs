@@ -21,4 +21,6 @@ fn main() {
     println!("Time: {}ms {}", t.elapsed().as_millis(), fd.len());
 
     fd.iter().take(20).for_each(|c| println!("{:?}", c));
+
+    println!("{:?}", &fd.dtypes());
 }

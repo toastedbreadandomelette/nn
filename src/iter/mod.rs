@@ -1,6 +1,6 @@
 use crate::cell::*;
 
-/// Custom iterator for column type [`DataFrame`]:
+/// Custom iterator for column type `DataFrame`:
 /// `DataFrameColumnIterator`
 pub struct DataFrameColumnIterator<'a> {
     /// Actual data frame

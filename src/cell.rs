@@ -10,7 +10,7 @@ pub enum Cell {
     Decimal(f64),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum CellType {
     /// String
     String,
@@ -18,4 +18,6 @@ pub enum CellType {
     I64,
     /// Floating Number
     F64,
+    /// Empty or null
+    Null,
 }
