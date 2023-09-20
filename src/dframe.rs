@@ -49,6 +49,12 @@ impl DataFrame {
 
     /// Header length of the Data Frame
     #[inline(always)]
+    pub fn header(&self) -> &[String] {
+        &self.header
+    }
+
+    /// Header length of the Data Frame
+    #[inline(always)]
     pub fn dtypes(&self) -> &[CellType] {
         &self.dtype
     }

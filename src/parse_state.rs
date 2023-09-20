@@ -69,6 +69,7 @@ pub enum ParseState {
     /// Read decimal number with decimal point read
     CellQuoteDecimalEndWithPointRead,
 
+    CarriageRet,
     /// Read separator
     CellSep,
     /// Skip character
@@ -195,7 +196,7 @@ impl PrevState {
             Self::EndFile => ParseState::EndFile,
             Self::NewLine => ParseState::NewLine,
             Self::SkipChar => ParseState::SkipChar,
-            Self::Start => ParseState::Start, // _ => ParseState::CellCurrent
+            Self::Start => ParseState::Start
         }
     }
 }
@@ -254,6 +255,8 @@ impl ParseState {
             // normal non-quoted string.
             Self::CellString
             | Self::CellCurrent
+            | Self::CellNumberStart
+            | Self::CellDecimalStart
             | Self::CellNumberCurrent
             | Self::CellDecimalCurrent
             | Self::CellDecimalStartWithPointRead
@@ -369,20 +372,10 @@ impl ParseState {
             | Self::CellDecimalCurrentWithPointRead => Self::CellDecimalEnd,
 
             Self::SkippedAssumeEndWhitespace(v) => {
-                if c == b'\r' {
-                    PrevState::get_end_of_parse_state(v)
-                } else {
-                    Self::NewLine
-                }
+                PrevState::get_end_of_parse_state(v)
             }
 
-            _ => {
-                if c == b'\r' {
-                    Self::CellSep
-                } else {
-                    Self::NewLine
-                }
-            }
+            _ => Self::NewLine
         }
     }
 
@@ -403,6 +396,42 @@ impl ParseState {
                 PrevState::get_end_of_parse_state(v)
             }
             _ => Self::CellQuoteStart,
+        }
+    }
+
+    #[inline(always)]
+    fn handle_cr(initial_state: Self) -> Self {
+        match initial_state {
+            // Starting with quote and running into new-line characters
+            // should default to normal quoted string.
+            Self::CellQuoteCurrent
+            | Self::CellQuoteStart
+            | Self::CellQuoteDecimalCurrent
+            | Self::CellQuoteDecimalStart
+            | Self::CellQuoteDecimalStartWithPointRead
+            | Self::CellQuoteDecimalCurrentWithPointRead => {
+                Self::CellQuoteCurrent
+            }
+
+            Self::CellNumberCurrent | Self::CellNumberStart => {
+                Self::CarriageRet
+            }
+
+            Self::CellDecimalCurrent
+            | Self::CellDecimalStart => { 
+                Self::SkippedAssumeEndWhitespace(PrevState::CellDecimalCurrent) 
+            }
+
+            Self::CellDecimalStartWithPointRead
+            | Self::CellDecimalCurrentWithPointRead => {
+                Self::SkippedAssumeEndWhitespace(PrevState::CellDecimalCurrentWithPointRead) 
+            },
+
+            Self::SkippedAssumeEndWhitespace(v) => {
+                Self::SkippedAssumeEndWhitespace(v)
+            }
+
+            _ => Self::CarriageRet
         }
     }
 
@@ -429,9 +458,20 @@ impl ParseState {
                 Self::CellQuoteCurrent
             }
 
+            Self::CellCurrent
+            | Self::CellDecimalStartWithPointRead
+            | Self::CellDecimalCurrentWithPointRead => {
+                Self::CellCurrent
+            }
+
             // If number read, assume that it is the end
             Self::CellNumberStart | Self::CellNumberCurrent => {
                 Self::SkippedAssumeEndWhitespace(PrevState::CellNumberCurrent)
+            }
+
+            // If number read, assume that it is the end
+            Self::CellDecimalStart | Self::CellDecimalCurrent => {
+                Self::SkippedAssumeEndWhitespace(PrevState::CellDecimalCurrent)
             }
 
             Self::SkippedAssumeEndWhitespace(v) => {
@@ -463,7 +503,8 @@ impl ParseState {
             // To-do Handle generic separator
             b',' => Self::handle_separator(initial_state),
 
-            b'\r' | b'\n' => Self::handle_lf(initial_state, c),
+            b'\n' => Self::handle_lf(initial_state, c),
+            b'\r' => Self::handle_cr(initial_state),
             // b' ' => Self::SkippedStartWhitespace,
             b' ' => Self::handle_white_space(initial_state),
             _ => Self::handle_default(initial_state),

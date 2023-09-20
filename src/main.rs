@@ -17,10 +17,10 @@ fn main() {
     let str3 = "Data7602DescendingYearOrder.csv";
 
     let t = std::time::Instant::now();
-    let fd = CsvParser::parse_multi_threaded(str2, 12);
+    let fd = CsvParser::parse_multi_threaded(str, 12);
     println!("Time: {}ms {}", t.elapsed().as_millis(), fd.len());
 
     fd.iter().take(20).for_each(|c| println!("{:?}", c));
 
-    println!("{:?}", &fd.dtypes());
+    println!("{:?}\n{:?}", &fd.header(), &fd.dtypes());
 }

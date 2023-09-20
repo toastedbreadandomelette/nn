@@ -312,7 +312,6 @@ impl<'a> CsvParser<'a> {
                                     let save_state_as =
                                         save_state.unwrap_or(self.state);
                                     let start_point = start.unwrap_or(index);
-
                                     unsafe {
                                         if start_point != end_point {
                                             let slice = Self::trim_ascii(
@@ -333,19 +332,18 @@ impl<'a> CsvParser<'a> {
                                         }
                                     }
                                 };
-                            if self.state != ParseState::NewLine {
-                                (start, end, save_state) = (None, None, None);
-                                if arr_index < column_data.len() {
-                                    column_data[arr_index] = push_value;
+                            
+                            (start, end, save_state) = (None, None, None);
+                            if arr_index < column_data.len() {
+                                column_data[arr_index] = push_value;
 
-                                    let prev_type =
-                                        res_type[arr_index % res_type.len()];
-                                    let val =
-                                        Self::agg_type(prev_type, result_type);
-                                    res_type[arr_index % res_type.len()] = val;
-                                }
-                                arr_index += 1;
+                                let prev_type =
+                                    res_type[arr_index % res_type.len()];
+                                let val =
+                                    Self::agg_type(prev_type, result_type);
+                                res_type[arr_index % res_type.len()] = val;
                             }
+                            arr_index += 1;
                         }
 
                         // Scan start of quoted header string,
@@ -356,6 +354,13 @@ impl<'a> CsvParser<'a> {
                         | ParseState::CellQuoteDecimalEndWithPointRead => {
                             end = Some(index);
                             save_state = Some(self.state);
+                        }
+
+                        ParseState::CarriageRet => {
+                            if end.is_none() {
+                                end = Some(index);
+                                save_state = Some(self.state);
+                            }
                         }
 
                         // Scan as it is
@@ -422,7 +427,7 @@ impl<'a> CsvParser<'a> {
 
         slices.push((
             &mmaped_buffer[end_prefix..],
-            end_prefix,
+            end_prefix + 1,
             mmaped_buffer.len(),
         ));
 
