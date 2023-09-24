@@ -162,7 +162,10 @@ impl<'a> CsvParser<'a> {
     #[inline]
     fn convert_from_slice(slice: &str, state: ParseState) -> (Cell, CellType) {
         match state {
-            ParseState::CellNumberEnd | ParseState::CellQuoteNumberEnd => {
+            ParseState::CellNumberStart
+            | ParseState::CellNumberCurrent
+            | ParseState::CellNumberEnd
+            | ParseState::CellQuoteNumberEnd => {
                 (Cell::Number(slice.parse::<i64>().unwrap()), CellType::I64)
             }
 
@@ -253,6 +256,8 @@ impl<'a> CsvParser<'a> {
     }
 
     /// Get total lines from the file
+    /// Cannot work properly with csv files handling \r\n new line 
+    /// (CRLF).
     #[allow(unused_assignments)]
     fn parse_content_on_buffer(
         &mut self,
@@ -260,115 +265,100 @@ impl<'a> CsvParser<'a> {
         res_type: &mut [CellType],
     ) {
         // Column data
-        let (mut start, mut end, chunk_size): (
-            Option<usize>,
-            Option<usize>,
-            _,
-        ) = (None, None, self.batch_size);
+        let (mut start, mut end): (Option<usize>, Option<usize>) = (None, None);
         let mut save_state = None;
 
         let mut arr_index = 0;
 
-        self.byte_buffer.chunks(chunk_size).enumerate().for_each(
-            |(idx, buff)| {
-                let curr = idx * chunk_size;
+        self.byte_buffer.iter().enumerate().for_each(|(index, c)| {
+            let prev_state = self.state;
+            self.state = ParseState::get_scan_state_from_data(self.state, *c);
+            // println!("{:?} {:?} {:?} {:?} -> {:?}", start, *c as char, save_state, prev_state, self.state);
+            match self.state {
+                // Scan start, get the current state based on the
+                // current byte and iterator takes care of
+                // rest accordingly
+                ParseState::Start
+                | ParseState::CellString
+                | ParseState::CellDecimalStartWithPointRead
+                | ParseState::CellNumberStart => {
+                    start = Some(index);
+                }
 
-                buff.iter().enumerate().for_each(|(new_idx, c)| {
-                    let index = curr + new_idx;
+                // Starting quoted values,
+                ParseState::CellQuoteStart
+                | ParseState::CellQuoteNumberStart
+                | ParseState::CellQuoteDecimalStart
+                | ParseState::CellQuoteDecimalStartWithPointRead => {
+                    start = Some(index + 1);
+                }
 
-                    self.state =
-                        ParseState::get_scan_state_from_data(self.state, *c);
+                // Scan start of quoted header string,
+                // read till the end of quote.
+                ParseState::CellNumberEnd
+                | ParseState::CellDecimalEnd
+                | ParseState::CellDecimalEndWithPointRead
+                | ParseState::CellSep
+                | ParseState::NewLine => {
+                    let (push_value, result_type) = if end.is_none()
+                        && start.is_none()
+                    {
+                        (Cell::Null, CellType::Null)
+                    } else {
+                        let ep = end.unwrap_or(index);
+                        let save_state_as = save_state.unwrap_or(self.state);
+                        let sp = start.unwrap_or(index);
+                        unsafe {
+                            if sp != ep {
+                                let slice = Self::trim_ascii(&self.byte_buffer[sp..ep]);
+                                let str_slice =
+                                    core::str::from_utf8_unchecked(slice);
 
-                    match self.state {
-                        // Scan start, get the current state based on the
-                        // current byte and iterator takes care of
-                        // rest accordingly
-                        ParseState::Start
-                        | ParseState::CellString
-                        | ParseState::CellDecimalStartWithPointRead
-                        | ParseState::CellNumberStart => {
-                            start = Some(index);
-                        }
-
-                        // Starting quoted values,
-                        ParseState::CellQuoteStart
-                        | ParseState::CellQuoteNumberStart
-                        | ParseState::CellQuoteDecimalStart
-                        | ParseState::CellQuoteDecimalStartWithPointRead => {
-                            start = Some(index + 1);
-                        }
-
-                        // Scan start of quoted header string,
-                        // read till the end of quote.
-                        ParseState::CellNumberEnd
-                        | ParseState::CellDecimalEnd
-                        | ParseState::CellSep
-                        | ParseState::NewLine => {
-                            let (push_value, result_type) =
-                                if end.is_none() && start.is_none() {
-                                    (Cell::Null, CellType::Null)
-                                } else {
-                                    let end_point = end.unwrap_or(index);
-                                    let save_state_as =
-                                        save_state.unwrap_or(self.state);
-                                    let start_point = start.unwrap_or(index);
-                                    unsafe {
-                                        if start_point != end_point {
-                                            let slice = Self::trim_ascii(
-                                                &self.byte_buffer
-                                                    [start_point..end_point],
-                                            );
-                                            let str_slice =
-                                                core::str::from_utf8_unchecked(
-                                                    slice,
-                                                );
-
-                                            Self::convert_from_slice(
-                                                str_slice,
-                                                save_state_as,
-                                            )
-                                        } else {
-                                            (Cell::Null, CellType::Null)
-                                        }
-                                    }
-                                };
-                            
-                            (start, end, save_state) = (None, None, None);
-                            if arr_index < column_data.len() {
-                                column_data[arr_index] = push_value;
-
-                                let prev_type =
-                                    res_type[arr_index % res_type.len()];
-                                let val =
-                                    Self::agg_type(prev_type, result_type);
-                                res_type[arr_index % res_type.len()] = val;
-                            }
-                            arr_index += 1;
-                        }
-
-                        // Scan start of quoted header string,
-                        // read till the end of quote.
-                        ParseState::CellQuoteEnd
-                        | ParseState::CellQuoteNumberEnd
-                        | ParseState::CellQuoteDecimalEnd
-                        | ParseState::CellQuoteDecimalEndWithPointRead => {
-                            end = Some(index);
-                            save_state = Some(self.state);
-                        }
-
-                        ParseState::CarriageRet => {
-                            if end.is_none() {
-                                end = Some(index);
-                                save_state = Some(self.state);
+                                Self::convert_from_slice(
+                                    str_slice,
+                                    save_state_as,
+                                )
+                            } else {
+                                (Cell::Null, CellType::Null)
                             }
                         }
+                    };
+                    let col = arr_index % res_type.len();
+                    (start, end, save_state) = (None, None, None);
 
-                        // Scan as it is
-                        _ => {}
+                    if arr_index < column_data.len() {
+                        column_data[arr_index] = push_value;
+
+                        let prev_type = res_type[col];
+                        let val = Self::agg_type(prev_type, result_type);
+                    
+                        res_type[col] = val;
                     }
-                });
-            },
-        );
+                    
+                    arr_index += 1;
+                }
+
+                // Scan start of quoted header string,
+                // read till the end of quote.
+                ParseState::CellQuoteEnd
+                | ParseState::CellQuoteNumberEnd
+                | ParseState::CellQuoteDecimalEnd
+                | ParseState::CellQuoteDecimalEndWithPointRead => {
+                    end = Some(index);
+                    save_state = Some(self.state);
+                }
+
+                ParseState::CarriageRet => {
+                    if end.is_none() {
+                        end = Some(index);
+                        save_state = Some(prev_state);
+                    }
+                }
+
+                // Scan as it is
+                _ => {}
+            }
+        });
     }
 
     /// Trim ascii having whitespaces, and returns a new `slice`

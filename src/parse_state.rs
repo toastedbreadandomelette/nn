@@ -196,7 +196,7 @@ impl PrevState {
             Self::EndFile => ParseState::EndFile,
             Self::NewLine => ParseState::NewLine,
             Self::SkipChar => ParseState::SkipChar,
-            Self::Start => ParseState::Start
+            Self::Start => ParseState::Start,
         }
     }
 }
@@ -375,7 +375,7 @@ impl ParseState {
                 PrevState::get_end_of_parse_state(v)
             }
 
-            _ => Self::NewLine
+            _ => Self::NewLine,
         }
     }
 
@@ -417,21 +417,22 @@ impl ParseState {
                 Self::CarriageRet
             }
 
-            Self::CellDecimalCurrent
-            | Self::CellDecimalStart => { 
-                Self::SkippedAssumeEndWhitespace(PrevState::CellDecimalCurrent) 
+            Self::CellDecimalCurrent | Self::CellDecimalStart => {
+                Self::SkippedAssumeEndWhitespace(PrevState::CellDecimalCurrent)
             }
 
             Self::CellDecimalStartWithPointRead
             | Self::CellDecimalCurrentWithPointRead => {
-                Self::SkippedAssumeEndWhitespace(PrevState::CellDecimalCurrentWithPointRead) 
-            },
+                Self::SkippedAssumeEndWhitespace(
+                    PrevState::CellDecimalCurrentWithPointRead,
+                )
+            }
 
             Self::SkippedAssumeEndWhitespace(v) => {
                 Self::SkippedAssumeEndWhitespace(v)
             }
 
-            _ => Self::CarriageRet
+            _ => Self::CarriageRet,
         }
     }
 
@@ -460,9 +461,7 @@ impl ParseState {
 
             Self::CellCurrent
             | Self::CellDecimalStartWithPointRead
-            | Self::CellDecimalCurrentWithPointRead => {
-                Self::CellCurrent
-            }
+            | Self::CellDecimalCurrentWithPointRead => Self::CellCurrent,
 
             // If number read, assume that it is the end
             Self::CellNumberStart | Self::CellNumberCurrent => {
