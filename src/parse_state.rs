@@ -349,7 +349,7 @@ impl ParseState {
     /// ```
     ///
     #[inline(always)]
-    fn handle_lf(initial_state: Self, c: u8) -> Self {
+    fn handle_lf(initial_state: Self) -> Self {
         match initial_state {
             // Starting with quote and running into new-line characters
             // should default to normal quoted string.
@@ -502,7 +502,7 @@ impl ParseState {
             // To-do Handle generic separator
             b',' => Self::handle_separator(initial_state),
 
-            b'\n' => Self::handle_lf(initial_state, c),
+            b'\n' => Self::handle_lf(initial_state),
             b'\r' => Self::handle_cr(initial_state),
             // b' ' => Self::SkippedStartWhitespace,
             b' ' => Self::handle_white_space(initial_state),

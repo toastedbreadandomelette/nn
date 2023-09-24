@@ -10,8 +10,6 @@ pub struct CsvParser<'a> {
     byte_buffer: &'a [u8],
     /// Current offset
     offset: usize,
-    /// Batch size
-    batch_size: usize,
     /// Current scan state
     state: ParseState,
     /// Headers
@@ -25,7 +23,6 @@ impl<'a> CsvParser<'a> {
         Self {
             byte_buffer,
             offset: 0,
-            batch_size: 2048,
             header_scanned: Vec::new(),
             state: ParseState::Start,
         }
@@ -266,9 +263,7 @@ impl<'a> CsvParser<'a> {
     ) {
         // Column data
         let (mut start, mut end): (Option<usize>, Option<usize>) = (None, None);
-        let mut save_state = None;
-
-        let mut arr_index = 0;
+        let (mut save_state, mut arr_index) = (None, 0);
 
         self.byte_buffer.iter().enumerate().for_each(|(index, c)| {
             let prev_state = self.state;
