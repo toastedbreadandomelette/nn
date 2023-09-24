@@ -256,7 +256,7 @@ impl<'a> CsvParser<'a> {
     }
 
     /// Get total lines from the file
-    /// Cannot work properly with csv files handling \r\n new line 
+    /// Cannot work properly with csv files handling \r\n new line
     /// (CRLF).
     #[allow(unused_assignments)]
     fn parse_content_on_buffer(
@@ -310,7 +310,8 @@ impl<'a> CsvParser<'a> {
                         let sp = start.unwrap_or(index);
                         unsafe {
                             if sp != ep {
-                                let slice = Self::trim_ascii(&self.byte_buffer[sp..ep]);
+                                let slice =
+                                    Self::trim_ascii(&self.byte_buffer[sp..ep]);
                                 let str_slice =
                                     core::str::from_utf8_unchecked(slice);
 
@@ -331,10 +332,10 @@ impl<'a> CsvParser<'a> {
 
                         let prev_type = res_type[col];
                         let val = Self::agg_type(prev_type, result_type);
-                    
+
                         res_type[col] = val;
                     }
-                    
+
                     arr_index += 1;
                 }
 
