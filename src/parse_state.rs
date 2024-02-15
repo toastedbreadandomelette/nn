@@ -497,7 +497,7 @@ impl ParseState {
             b'.' => Self::handle_decimal_state(initial_state),
 
             // Handle when a single point is read by the parser
-            b'0'..=b'9' => Self::handle_number(initial_state),
+            b'0'..=b'9' | b'+' | b'-' => Self::handle_number(initial_state),
 
             // To-do Handle generic separator
             b',' => Self::handle_separator(initial_state),

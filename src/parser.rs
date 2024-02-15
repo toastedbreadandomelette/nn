@@ -29,12 +29,9 @@ impl<'a> CsvParser<'a> {
     }
 
     #[inline(always)]
-    pub const fn get_curr_byte(&self) -> Option<u8> {
-        if self.offset >= self.byte_buffer.len() {
-            None
-        } else {
-            Some(self.byte_buffer[self.offset])
-        }
+    pub fn get_curr_byte(&self) -> Option<u8> {
+        (self.offset < self.byte_buffer.len())
+            .then_some(self.byte_buffer[self.offset])
     }
 
     /// Move to next byte
@@ -52,7 +49,7 @@ impl<'a> CsvParser<'a> {
     }
 
     #[inline(always)]
-    const fn scan_start(&self) -> ParseState {
+    fn scan_start(&self) -> ParseState {
         match self.get_curr_byte() {
             Some(b'"') => ParseState::HeaderQuoteStart,
             Some(b',') => ParseState::HeaderSep,
@@ -62,7 +59,7 @@ impl<'a> CsvParser<'a> {
     }
 
     #[inline]
-    pub fn scan_header_quote(&mut self) -> String {
+    fn scan_header_quote(&mut self) -> String {
         self.move_next();
         let starting_point = self.offset;
 
@@ -85,7 +82,7 @@ impl<'a> CsvParser<'a> {
     }
 
     #[inline]
-    pub fn scan_header_string(&mut self) -> String {
+    fn scan_header_string(&mut self) -> String {
         let starting_point = self.offset;
         self.move_next();
 
@@ -112,7 +109,7 @@ impl<'a> CsvParser<'a> {
     }
 
     /// Scan header
-    pub fn scan_header(&mut self) -> (Vec<String>, usize) {
+    fn scan_header(&mut self) -> (Vec<String>, usize) {
         assert_eq!(self.offset, 0);
 
         self.skip_whitespace();
@@ -220,38 +217,6 @@ impl<'a> CsvParser<'a> {
         mut_slices
     }
 
-    #[inline(always)]
-    pub fn aggregate_from_null(curr: CellType) -> CellType {
-        curr
-    }
-
-    #[inline(always)]
-    pub fn aggregate_from_f64(curr: CellType) -> CellType {
-        match curr {
-            CellType::String => CellType::String,
-            _ => CellType::F64,
-        }
-    }
-
-    #[inline(always)]
-    pub fn aggregate_from_i64(curr: CellType) -> CellType {
-        match curr {
-            CellType::F64 => CellType::F64,
-            CellType::String => CellType::String,
-            _ => CellType::I64,
-        }
-    }
-
-    #[inline(always)]
-    pub fn agg_type(aggregate_type: CellType, curr: CellType) -> CellType {
-        match aggregate_type {
-            CellType::Null => Self::aggregate_from_null(curr),
-            CellType::F64 => Self::aggregate_from_f64(curr),
-            CellType::I64 => Self::aggregate_from_i64(curr),
-            _ => CellType::String,
-        }
-    }
-
     /// Get total lines from the file
     /// Cannot work properly with csv files handling \r\n new line
     /// (CRLF).
@@ -268,7 +233,7 @@ impl<'a> CsvParser<'a> {
         self.byte_buffer.iter().enumerate().for_each(|(index, c)| {
             let prev_state = self.state;
             self.state = ParseState::get_scan_state_from_data(self.state, *c);
-            // println!("{:?} {:?} {:?} {:?} -> {:?}", start, *c as char, save_state, prev_state, self.state);
+
             match self.state {
                 // Scan start, get the current state based on the
                 // current byte and iterator takes care of
@@ -303,22 +268,20 @@ impl<'a> CsvParser<'a> {
                         let ep = end.unwrap_or(index);
                         let save_state_as = save_state.unwrap_or(self.state);
                         let sp = start.unwrap_or(index);
-                        unsafe {
-                            if sp != ep {
-                                let slice =
-                                    Self::trim_ascii(&self.byte_buffer[sp..ep]);
-                                let str_slice =
-                                    core::str::from_utf8_unchecked(slice);
 
-                                Self::convert_from_slice(
-                                    str_slice,
-                                    save_state_as,
-                                )
-                            } else {
-                                (Cell::Null, CellType::Null)
-                            }
+                        if sp != ep {
+                            let slice =
+                                Self::trim_ascii(&self.byte_buffer[sp..ep]);
+                            let str_slice = unsafe {
+                                core::str::from_utf8_unchecked(slice)
+                            };
+
+                            Self::convert_from_slice(str_slice, save_state_as)
+                        } else {
+                            (Cell::Null, CellType::Null)
                         }
                     };
+
                     let col = arr_index % res_type.len();
                     (start, end, save_state) = (None, None, None);
 
@@ -326,7 +289,7 @@ impl<'a> CsvParser<'a> {
                         column_data[arr_index] = push_value;
 
                         let prev_type = res_type[col];
-                        let val = Self::agg_type(prev_type, result_type);
+                        let val = prev_type.infer_type(result_type);
 
                         res_type[col] = val;
                     }
@@ -364,9 +327,11 @@ impl<'a> CsvParser<'a> {
         let end = slice.iter().rev().position(|c| !c.is_ascii_whitespace());
 
         match (start, end) {
-            (Some(st), Some(ed)) => &slice[st..slice.len() - ed],
-            (None, Some(ed)) => &slice[..slice.len() - ed],
-            (Some(st), None) => &slice[st..],
+            (Some(starting_index), Some(ending_index)) => {
+                &slice[starting_index..slice.len() - ending_index]
+            }
+            (None, Some(ending_index)) => &slice[..slice.len() - ending_index],
+            (Some(starting_index), None) => &slice[starting_index..],
             (None, None) => slice,
         }
     }
@@ -460,25 +425,31 @@ impl<'a> CsvParser<'a> {
         let mut p = CsvParser::new(&mmaped);
         let (scanned_header, offset_from_scanner) = p.scan_header();
         let next_pos = offset_from_scanner
-            + match mmaped[offset_from_scanner..]
+            + mmaped
                 .iter()
+                .skip(offset_from_scanner)
                 .position(|c| *c == b'\n')
-            {
-                Some(val) => val + 1,
-                None => 0,
-            };
+                .unwrap_or(0);
 
         let mmaped_slice = Self::trim_ascii(&mmaped[next_pos..]);
+
         // Calculate total lines read
+        // To do: single threaded CSV parsing
         let length = std::thread::scope(|scope| {
             Self::get_total_lines_in_a_file(mmaped_slice, scope, total_threads)
         });
+
         let c = length.iter().fold(0, |prev, curr| prev + curr.0) - 1;
 
         // Initialized result with zero value.
         let mut result: Vector<Cell> = Vector::zeroed(c * scanned_header.len());
-        let mut result_types: Vec<Vec<CellType>> =
-            vec![vec![CellType::Null; scanned_header.len()]; total_threads];
+        let mut result_types: Vector<Vector<CellType>> =
+            Vector::zeroed(total_threads);
+
+        result_types.iter_mut().for_each(|res| {
+            *res = Vector::zeroed(scanned_header.len());
+            res.fill(CellType::Null);
+        });
 
         // UNSAFE CALL: Creates multiple slices of vector `result` into smaller pieces,
         // since reallocating multiple vector or flattening is slower.
@@ -496,7 +467,7 @@ impl<'a> CsvParser<'a> {
 
             sliced_buffer
                 .iter_mut()
-                .zip(result_types.iter_mut())
+                .zip(result_types.iter_mut().map(|c| &mut c[..]))
                 .zip(length)
                 .enumerate()
                 .for_each(|(_, ((res, res_types), (len, start, end)))| {
@@ -513,11 +484,15 @@ impl<'a> CsvParser<'a> {
         });
 
         let res = result_types.iter_mut().fold(
-            vec![CellType::Null; scanned_header.len()],
+            {
+                let mut res = Vector::zeroed(scanned_header.len());
+                res.fill(CellType::Null);
+                res
+            },
             |mut prev, arr| {
                 prev.iter_mut()
-                    .zip(arr)
-                    .for_each(|(p, c)| *p = Self::agg_type(*p, *c));
+                    .zip(arr.iter_mut())
+                    .for_each(|(p, c)| *p = p.infer_type(*c));
                 prev
             },
         );

@@ -1,3 +1,4 @@
+pub mod dframe_iter;
 use crate::cell::*;
 
 /// Custom iterator for column type `DataFrame`:
@@ -10,8 +11,6 @@ pub struct DataFrameColumnIterator<'a> {
     /// Index that points to current cell
     index: usize,
 }
-
-pub mod dframe_iter;
 
 impl<'a> DataFrameColumnIterator<'a> {
     /// Create a new column iterator

@@ -10,7 +10,7 @@ pub struct DataFrame {
     /// Header name for each string
     header: Vec<String>,
     /// Data Type of each header type
-    dtype: Vec<CellType>,
+    dtype: Vector<CellType>,
 }
 
 impl DataFrame {
@@ -18,7 +18,7 @@ impl DataFrame {
     pub(super) fn new(
         column_data: Vector<Cell>,
         header: Vec<String>,
-        dtype: Vec<CellType>,
+        dtype: Vector<CellType>,
     ) -> Self {
         Self {
             column_data,
